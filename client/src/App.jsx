@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useRef } from 'react';
 
 const STYLE_PRESETS = [
   { name: 'Photorealistic', keywords: 'photorealistic, highly detailed, 8k, professional photography' },
@@ -26,6 +26,9 @@ const MOOD_OPTIONS = [
   'Gritty & Raw',
 ];
 
+const ALLOWED_TYPES = ['image/png', 'image/jpeg', 'image/webp'];
+const MAX_FILE_SIZE = 25 * 1024 * 1024;
+
 function App() {
   const [subject, setSubject] = useState('');
   const [styleKeywords, setStyleKeywords] = useState('');
@@ -36,6 +39,9 @@ function App() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [generatedPrompt, setGeneratedPrompt] = useState('');
+  const [referenceImage, setReferenceImage] = useState(null);
+  const [imagePreview, setImagePreview] = useState('');
+  const fileInputRef = useRef(null);
 
   const handlePresetClick = (preset) => {
     if (selectedPreset?.name === preset.name) {
@@ -45,6 +51,45 @@ function App() {
       setSelectedPreset(preset);
       setStyleKeywords(preset.keywords);
     }
+  };
+
+  const handleFileSelect = (file) => {
+    if (!file) return;
+
+    if (!ALLOWED_TYPES.includes(file.type)) {
+      setError('Only PNG, JPG, and WebP files are allowed');
+      return;
+    }
+
+    if (file.size > MAX_FILE_SIZE) {
+      setError('File is too large. Maximum size is 25MB.');
+      return;
+    }
+
+    setError('');
+    setReferenceImage(file);
+
+    const reader = new FileReader();
+    reader.onload = (e) => setImagePreview(e.target.result);
+    reader.readAsDataURL(file);
+  };
+
+  const handleRemoveImage = () => {
+    setReferenceImage(null);
+    setImagePreview('');
+    if (fileInputRef.current) {
+      fileInputRef.current.value = '';
+    }
+  };
+
+  const handleDrop = (e) => {
+    e.preventDefault();
+    const file = e.dataTransfer.files[0];
+    handleFileSelect(file);
+  };
+
+  const handleDragOver = (e) => {
+    e.preventDefault();
   };
 
   const buildPrompt = () => {
@@ -85,12 +130,15 @@ function App() {
     setGeneratedPrompt(prompt);
 
     try {
+      const formData = new FormData();
+      formData.append('prompt', prompt);
+      if (referenceImage) {
+        formData.append('referenceImage', referenceImage);
+      }
+
       const response = await fetch('http://localhost:3001/api/generate', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ prompt }),
+        body: formData,
       });
 
       const data = await response.json();
@@ -122,6 +170,44 @@ function App() {
             rows={3}
             disabled={loading}
           />
+        </div>
+
+        <div className="input-group">
+          <label>Reference Image (optional)</label>
+          <input
+            type="file"
+            ref={fileInputRef}
+            accept="image/png,image/jpeg,image/webp"
+            onChange={(e) => handleFileSelect(e.target.files[0])}
+            style={{ display: 'none' }}
+          />
+          {!imagePreview ? (
+            <div
+              className="upload-area"
+              onClick={() => !loading && fileInputRef.current?.click()}
+              onDrop={handleDrop}
+              onDragOver={handleDragOver}
+            >
+              <span className="upload-icon">+</span>
+              <p>Drag & drop an image here, or click to browse</p>
+              <p className="upload-hint">PNG, JPG, or WebP — max 25MB</p>
+            </div>
+          ) : (
+            <div className="preview-container">
+              <img src={imagePreview} alt="Reference preview" className="reference-preview" />
+              <button
+                className="remove-image-btn"
+                onClick={handleRemoveImage}
+                disabled={loading}
+                title="Remove image"
+              >
+                &times;
+              </button>
+            </div>
+          )}
+          {referenceImage && (
+            <p className="model-note">Using gpt-image-1 (image edit mode)</p>
+          )}
         </div>
 
         <div className="input-group">
