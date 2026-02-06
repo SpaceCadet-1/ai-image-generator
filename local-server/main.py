@@ -1,9 +1,7 @@
-import asyncio
 import io
 import base64
 import logging
 from contextlib import asynccontextmanager
-from functools import partial
 
 import torch
 from diffusers import FluxPipeline, FluxImg2ImgPipeline
@@ -27,7 +25,7 @@ async def lifespan(app: FastAPI):
             MODEL_ID,
             torch_dtype=torch.float16,
         )
-        pipe.enable_model_cpu_offload()
+        pipe.enable_sequential_cpu_offload()
 
         # Build img2img from same weights
         pipe_i2i = FluxImg2ImgPipeline.from_pipe(pipe)
@@ -67,7 +65,7 @@ def generate_image_response(image: Image.Image) -> JSONResponse:
 
 
 @app.post("/generate")
-async def generate(
+def generate(
     prompt: str = Form(...),
     negative_prompt: str = Form(""),
 ):
@@ -76,18 +74,12 @@ async def generate(
 
     pipe = model_state["pipe_t2i"]
     try:
-        # Run blocking GPU work in a thread so the event loop stays alive
-        loop = asyncio.get_event_loop()
-        result = await loop.run_in_executor(
-            None,
-            partial(
-                pipe,
-                prompt=prompt,
-                num_inference_steps=4,
-                guidance_scale=0.0,
-                width=1024,
-                height=1024,
-            ),
+        result = pipe(
+            prompt=prompt,
+            num_inference_steps=4,
+            guidance_scale=0.0,
+            width=512,
+            height=512,
         )
         return generate_image_response(result.images[0])
     except torch.cuda.OutOfMemoryError:
@@ -99,7 +91,7 @@ async def generate(
 
 
 @app.post("/generate-img2img")
-async def generate_img2img(
+def generate_img2img(
     prompt: str = Form(...),
     negative_prompt: str = Form(""),
     strength: float = Form(0.9),
@@ -110,21 +102,15 @@ async def generate_img2img(
 
     pipe = model_state["pipe_i2i"]
     try:
-        raw = await image.read()
-        init_image = Image.open(io.BytesIO(raw)).convert("RGB").resize((1024, 1024))
+        raw = image.file.read()
+        init_image = Image.open(io.BytesIO(raw)).convert("RGB").resize((512, 512))
 
-        # Run blocking GPU work in a thread so the event loop stays alive
-        loop = asyncio.get_event_loop()
-        result = await loop.run_in_executor(
-            None,
-            partial(
-                pipe,
-                prompt=prompt,
-                image=init_image,
-                strength=strength,
-                num_inference_steps=4,
-                guidance_scale=0.0,
-            ),
+        result = pipe(
+            prompt=prompt,
+            image=init_image,
+            strength=strength,
+            num_inference_steps=4,
+            guidance_scale=0.0,
         )
         return generate_image_response(result.images[0])
     except torch.cuda.OutOfMemoryError:

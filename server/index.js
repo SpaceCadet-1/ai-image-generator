@@ -113,11 +113,11 @@ async function generateLocal(prompt, filePath) {
     resp = await fetch(`${LOCAL_SERVER}${endpoint}`, {
       method: 'POST',
       body: formData,
-      signal: AbortSignal.timeout(120_000), // 2 minute timeout
+      signal: AbortSignal.timeout(600_000), // 10 minute timeout
     });
   } catch (err) {
     if (err.name === 'TimeoutError') {
-      throw new Error('Local GPU generation timed out after 2 minutes. The model may be overloaded — try again.');
+      throw new Error('Local GPU generation timed out after 10 minutes. The model may be overloaded — try again.');
     }
     throw new Error(
       `Cannot connect to local GPU server at ${LOCAL_SERVER}. Is it running? Start it with: cd local-server && .venv\\Scripts\\python run.py`
