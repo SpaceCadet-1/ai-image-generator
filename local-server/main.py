@@ -1,10 +1,12 @@
+import asyncio
 import io
 import base64
 import logging
 from contextlib import asynccontextmanager
+from functools import partial
 
 import torch
-from diffusers import StableDiffusionXLPipeline, DPMSolverMultistepScheduler, AutoPipelineForImage2Image
+from diffusers import FluxPipeline, FluxImg2ImgPipeline
 from fastapi import FastAPI, File, Form, UploadFile
 from fastapi.responses import JSONResponse
 from PIL import Image
@@ -14,30 +16,26 @@ logger = logging.getLogger(__name__)
 
 model_state = {"status": "loading", "pipe_t2i": None, "pipe_i2i": None}
 
-MODEL_ID = "stabilityai/stable-diffusion-xl-base-1.0"
+MODEL_ID = "black-forest-labs/FLUX.1-schnell"
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Startup: load SDXL pipeline
-    logger.info("Loading SDXL pipeline — this may take a minute on first run...")
+    logger.info("Loading FLUX.1-schnell pipeline — first run downloads ~12GB...")
     try:
-        pipe = StableDiffusionXLPipeline.from_pretrained(
+        pipe = FluxPipeline.from_pretrained(
             MODEL_ID,
             torch_dtype=torch.float16,
-            variant="fp16",
-            use_safetensors=True,
         )
-        pipe.scheduler = DPMSolverMultistepScheduler.from_config(pipe.scheduler.config)
-        pipe.to("cuda")
+        pipe.enable_model_cpu_offload()
 
-        # Build img2img from same weights (no extra VRAM)
-        pipe_i2i = AutoPipelineForImage2Image.from_pipe(pipe)
+        # Build img2img from same weights
+        pipe_i2i = FluxImg2ImgPipeline.from_pipe(pipe)
 
         model_state["pipe_t2i"] = pipe
         model_state["pipe_i2i"] = pipe_i2i
         model_state["status"] = "ready"
-        logger.info("SDXL model loaded and ready.")
+        logger.info("FLUX.1-schnell loaded and ready.")
     except Exception as e:
         logger.error(f"Failed to load model: {e}")
         model_state["status"] = "error"
@@ -78,13 +76,18 @@ async def generate(
 
     pipe = model_state["pipe_t2i"]
     try:
-        result = pipe(
-            prompt=prompt,
-            negative_prompt=negative_prompt or None,
-            num_inference_steps=30,
-            guidance_scale=7.5,
-            width=1024,
-            height=1024,
+        # Run blocking GPU work in a thread so the event loop stays alive
+        loop = asyncio.get_event_loop()
+        result = await loop.run_in_executor(
+            None,
+            partial(
+                pipe,
+                prompt=prompt,
+                num_inference_steps=4,
+                guidance_scale=0.0,
+                width=1024,
+                height=1024,
+            ),
         )
         return generate_image_response(result.images[0])
     except torch.cuda.OutOfMemoryError:
@@ -110,13 +113,18 @@ async def generate_img2img(
         raw = await image.read()
         init_image = Image.open(io.BytesIO(raw)).convert("RGB").resize((1024, 1024))
 
-        result = pipe(
-            prompt=prompt,
-            negative_prompt=negative_prompt or None,
-            image=init_image,
-            strength=strength,
-            num_inference_steps=30,
-            guidance_scale=7.5,
+        # Run blocking GPU work in a thread so the event loop stays alive
+        loop = asyncio.get_event_loop()
+        result = await loop.run_in_executor(
+            None,
+            partial(
+                pipe,
+                prompt=prompt,
+                image=init_image,
+                strength=strength,
+                num_inference_steps=4,
+                guidance_scale=0.0,
+            ),
         )
         return generate_image_response(result.images[0])
     except torch.cuda.OutOfMemoryError:

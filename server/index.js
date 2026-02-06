@@ -100,31 +100,29 @@ async function generateLocal(prompt, filePath) {
     ? `${SDXL_DEFAULT_NEGATIVE}, ${negativePrompt}`
     : SDXL_DEFAULT_NEGATIVE;
 
-  if (filePath) {
-    // img2img: send file to FastAPI
-    const formData = new FormData();
-    formData.append('prompt', positivePrompt);
-    formData.append('negative_prompt', negativePrompt);
-    formData.append('image', new Blob([fs.readFileSync(filePath)]), 'image.png');
-
-    const resp = await fetch(`${LOCAL_SERVER}/generate-img2img`, {
-      method: 'POST',
-      body: formData,
-    });
-    const data = await resp.json();
-    if (!resp.ok) throw new Error(data.error || 'Local img2img generation failed');
-    return data.imageUrl;
-  }
-
-  // text-to-image
+  const endpoint = filePath ? '/generate-img2img' : '/generate';
   const formData = new FormData();
   formData.append('prompt', positivePrompt);
   formData.append('negative_prompt', negativePrompt);
+  if (filePath) {
+    formData.append('image', new Blob([fs.readFileSync(filePath)]), 'image.png');
+  }
 
-  const resp = await fetch(`${LOCAL_SERVER}/generate`, {
-    method: 'POST',
-    body: formData,
-  });
+  let resp;
+  try {
+    resp = await fetch(`${LOCAL_SERVER}${endpoint}`, {
+      method: 'POST',
+      body: formData,
+      signal: AbortSignal.timeout(120_000), // 2 minute timeout
+    });
+  } catch (err) {
+    if (err.name === 'TimeoutError') {
+      throw new Error('Local GPU generation timed out after 2 minutes. The model may be overloaded — try again.');
+    }
+    throw new Error(
+      `Cannot connect to local GPU server at ${LOCAL_SERVER}. Is it running? Start it with: cd local-server && .venv\\Scripts\\python run.py`
+    );
+  }
   const data = await resp.json();
   if (!resp.ok) throw new Error(data.error || 'Local generation failed');
   return data.imageUrl;

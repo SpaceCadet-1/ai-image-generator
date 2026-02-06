@@ -167,7 +167,11 @@ function App() {
 
       setImageUrl(data.imageUrl);
     } catch (err) {
-      setError(err.message);
+      if (err.message === 'Failed to fetch') {
+        setError('Cannot connect to the API server on port 3001. Is it running?');
+      } else {
+        setError(err.message);
+      }
     } finally {
       setLoading(false);
     }
