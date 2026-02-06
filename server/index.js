@@ -19,13 +19,14 @@ if (!fs.existsSync(uploadsDir)) {
 
 const app = express();
 const PORT = 3001;
+const LOCAL_SERVER = 'http://localhost:8000';
 
 app.use(cors());
-app.use(express.json());
+app.use(express.json({ limit: '50mb' }));
 
-const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY,
-});
+const openai = process.env.OPENAI_API_KEY
+  ? new OpenAI({ apiKey: process.env.OPENAI_API_KEY })
+  : null;
 
 const storage = multer.diskStorage({
   destination: uploadsDir,
@@ -48,8 +49,102 @@ const upload = multer({
   },
 });
 
+// --- OpenAI generation helper ---
+async function generateOpenAI(prompt, filePath, originalname, mimetype) {
+  if (!openai) {
+    throw new Error('OpenAI API key is not configured. Set OPENAI_API_KEY in server/.env');
+  }
+  if (filePath) {
+    const imageFile = await toFile(
+      fs.createReadStream(filePath),
+      originalname,
+      { type: mimetype }
+    );
+    const response = await openai.images.edit({
+      model: 'gpt-image-1',
+      image: imageFile,
+      prompt,
+      n: 1,
+      size: '1024x1024',
+    });
+    const base64 = response.data[0].b64_json;
+    return `data:image/png;base64,${base64}`;
+  }
+
+  const response = await openai.images.generate({
+    model: 'dall-e-3',
+    prompt,
+    n: 1,
+    size: '1024x1024',
+  });
+  return response.data[0].url;
+}
+
+// --- Local SDXL generation helper ---
+const SDXL_QUALITY_SUFFIX = ', masterpiece, best quality, highly detailed, sharp focus, professional';
+const SDXL_DEFAULT_NEGATIVE = 'worst quality, low quality, blurry, deformed, distorted, disfigured, bad anatomy, watermark, text, signature';
+
+async function generateLocal(prompt, filePath) {
+  // Split "Without: ..." into negative_prompt
+  let positivePrompt = prompt;
+  let negativePrompt = '';
+  const withoutMatch = prompt.match(/\.\s*Without:\s*(.+)$/i);
+  if (withoutMatch) {
+    negativePrompt = withoutMatch[1].trim();
+    positivePrompt = prompt.slice(0, withoutMatch.index).trim();
+  }
+
+  // Boost SDXL prompts with quality keywords
+  positivePrompt += SDXL_QUALITY_SUFFIX;
+  negativePrompt = negativePrompt
+    ? `${SDXL_DEFAULT_NEGATIVE}, ${negativePrompt}`
+    : SDXL_DEFAULT_NEGATIVE;
+
+  if (filePath) {
+    // img2img: send file to FastAPI
+    const formData = new FormData();
+    formData.append('prompt', positivePrompt);
+    formData.append('negative_prompt', negativePrompt);
+    formData.append('image', new Blob([fs.readFileSync(filePath)]), 'image.png');
+
+    const resp = await fetch(`${LOCAL_SERVER}/generate-img2img`, {
+      method: 'POST',
+      body: formData,
+    });
+    const data = await resp.json();
+    if (!resp.ok) throw new Error(data.error || 'Local img2img generation failed');
+    return data.imageUrl;
+  }
+
+  // text-to-image
+  const formData = new FormData();
+  formData.append('prompt', positivePrompt);
+  formData.append('negative_prompt', negativePrompt);
+
+  const resp = await fetch(`${LOCAL_SERVER}/generate`, {
+    method: 'POST',
+    body: formData,
+  });
+  const data = await resp.json();
+  if (!resp.ok) throw new Error(data.error || 'Local generation failed');
+  return data.imageUrl;
+}
+
+// --- Local server health proxy ---
+app.get('/api/local-status', async (req, res) => {
+  try {
+    const resp = await fetch(`${LOCAL_SERVER}/health`);
+    const data = await resp.json();
+    res.json(data);
+  } catch {
+    res.json({ status: 'offline' });
+  }
+});
+
+// --- Main generate endpoint ---
 app.post('/api/generate', upload.single('referenceImage'), async (req, res) => {
   const prompt = req.body.prompt;
+  const mode = req.body.mode || 'api';
 
   if (!prompt || prompt.trim() === '') {
     return res.status(400).json({ error: 'Prompt is required' });
@@ -60,31 +155,15 @@ app.post('/api/generate', upload.single('referenceImage'), async (req, res) => {
   try {
     let imageUrl;
 
-    if (req.file) {
-      const imageFile = await toFile(
-        fs.createReadStream(tempFilePath),
-        req.file.originalname,
-        { type: req.file.mimetype }
-      );
-      const response = await openai.images.edit({
-        model: 'gpt-image-1',
-        image: imageFile,
-        prompt: prompt,
-        n: 1,
-        size: '1024x1024',
-      });
-
-      const base64 = response.data[0].b64_json;
-      imageUrl = `data:image/png;base64,${base64}`;
+    if (mode === 'local') {
+      imageUrl = await generateLocal(prompt, tempFilePath);
     } else {
-      const response = await openai.images.generate({
-        model: 'dall-e-3',
-        prompt: prompt,
-        n: 1,
-        size: '1024x1024',
-      });
-
-      imageUrl = response.data[0].url;
+      imageUrl = await generateOpenAI(
+        prompt,
+        tempFilePath,
+        req.file?.originalname,
+        req.file?.mimetype
+      );
     }
 
     res.json({ imageUrl });

@@ -1,4 +1,4 @@
-import { useState, useRef } from 'react';
+import { useState, useRef, useEffect } from 'react';
 
 const STYLE_PRESETS = [
   { name: 'Photorealistic', keywords: 'photorealistic, highly detailed, 8k, professional photography' },
@@ -41,7 +41,24 @@ function App() {
   const [generatedPrompt, setGeneratedPrompt] = useState('');
   const [referenceImage, setReferenceImage] = useState(null);
   const [imagePreview, setImagePreview] = useState('');
+  const [mode, setMode] = useState('api');
+  const [localStatus, setLocalStatus] = useState('offline');
   const fileInputRef = useRef(null);
+
+  useEffect(() => {
+    const checkLocalStatus = async () => {
+      try {
+        const resp = await fetch('http://localhost:3001/api/local-status');
+        const data = await resp.json();
+        setLocalStatus(data.status);
+      } catch {
+        setLocalStatus('offline');
+      }
+    };
+    checkLocalStatus();
+    const interval = setInterval(checkLocalStatus, 10000);
+    return () => clearInterval(interval);
+  }, []);
 
   const handlePresetClick = (preset) => {
     if (selectedPreset?.name === preset.name) {
@@ -132,6 +149,7 @@ function App() {
     try {
       const formData = new FormData();
       formData.append('prompt', prompt);
+      formData.append('mode', mode);
       if (referenceImage) {
         formData.append('referenceImage', referenceImage);
       }
@@ -155,10 +173,44 @@ function App() {
     }
   };
 
+  const getModelNote = () => {
+    if (mode === 'local') {
+      return referenceImage
+        ? 'Using SDXL img2img (local GPU)'
+        : 'Using SDXL text-to-image (local GPU)';
+    }
+    return referenceImage ? 'Using gpt-image-1 (image edit mode)' : null;
+  };
+
+  const modelNote = getModelNote();
+
   return (
     <div className="container">
       <h1>AI Image Generator</h1>
       <p className="subtitle">Fine-tune your image with detailed controls</p>
+
+      <div className="mode-toggle">
+        <button
+          className={`mode-btn ${mode === 'api' ? 'active' : ''}`}
+          onClick={() => setMode('api')}
+          disabled={loading}
+        >
+          OpenAI API
+        </button>
+        <button
+          className={`mode-btn ${mode === 'local' ? 'active' : ''}`}
+          onClick={() => setMode('local')}
+          disabled={loading || localStatus === 'offline'}
+          title={localStatus === 'offline' ? 'Local GPU server is not running' : ''}
+        >
+          Local GPU
+        </button>
+        <span className={`mode-status ${localStatus}`}>
+          {localStatus === 'ready' ? 'GPU Ready' :
+           localStatus === 'loading' ? 'Loading Model...' :
+           'GPU Offline'}
+        </span>
+      </div>
 
       <div className="form-section">
         <div className="input-group">
@@ -205,8 +257,8 @@ function App() {
               </button>
             </div>
           )}
-          {referenceImage && (
-            <p className="model-note">Using gpt-image-1 (image edit mode)</p>
+          {modelNote && (
+            <p className="model-note">{modelNote}</p>
           )}
         </div>
 
@@ -268,7 +320,9 @@ function App() {
         </div>
 
         <button className="generate-btn" onClick={handleGenerate} disabled={loading}>
-          {loading ? 'Generating...' : 'Generate Image'}
+          {loading
+            ? mode === 'local' ? 'Generating on GPU...' : 'Generating...'
+            : 'Generate Image'}
         </button>
       </div>
 
@@ -277,7 +331,7 @@ function App() {
       {loading && (
         <div className="loading">
           <div className="spinner"></div>
-          <p>Creating your image...</p>
+          <p>{mode === 'local' ? 'Running SDXL on your GPU...' : 'Creating your image...'}</p>
         </div>
       )}
 

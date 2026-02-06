@@ -6,3 +6,6 @@ dist/
 package-lock.json
 uploads/
 .claude/
+__pycache__/
+*.pyc
+.venv/

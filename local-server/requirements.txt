@@ -1,0 +1,10 @@
+diffusers==0.31.0
+transformers==4.46.3
+accelerate
+safetensors
+fastapi
+uvicorn[standard]
+python-multipart
+Pillow
+sentencepiece
+protobuf

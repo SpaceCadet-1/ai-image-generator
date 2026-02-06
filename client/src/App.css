@@ -31,7 +31,72 @@ h1 {
 .subtitle {
   text-align: center;
   color: #888;
-  margin-bottom: 40px;
+  margin-bottom: 20px;
+}
+
+/* Mode Toggle */
+.mode-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0;
+  margin-bottom: 30px;
+}
+
+.mode-btn {
+  padding: 10px 24px;
+  font-size: 0.9rem;
+  font-weight: 600;
+  border: 2px solid #333;
+  background: transparent;
+  color: #888;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.mode-btn:first-child {
+  border-radius: 8px 0 0 8px;
+  border-right: 1px solid #333;
+}
+
+.mode-btn:nth-child(2) {
+  border-radius: 0 8px 8px 0;
+  border-left: 1px solid #333;
+}
+
+.mode-btn:hover:not(:disabled) {
+  border-color: #00d4ff;
+  color: #00d4ff;
+}
+
+.mode-btn.active {
+  background: linear-gradient(90deg, rgba(0, 212, 255, 0.2), rgba(123, 44, 191, 0.2));
+  border-color: #00d4ff;
+  color: #fff;
+}
+
+.mode-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.mode-status {
+  margin-left: 14px;
+  font-size: 0.8rem;
+  font-weight: 500;
+}
+
+.mode-status.ready {
+  color: #4ade80;
+}
+
+.mode-status.loading {
+  color: #facc15;
+}
+
+.mode-status.offline,
+.mode-status.error {
+  color: #666;
 }
 
 .form-section {
