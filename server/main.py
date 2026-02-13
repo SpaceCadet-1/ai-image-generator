@@ -22,9 +22,14 @@ from pathlib import Path
 
 from fastapi import FastAPI, File, Form, UploadFile, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
 from PIL import Image
 
 from config import UPLOADS_DIR, ALLOWED_EXTENSIONS, MAX_UPLOAD_SIZE, HOST, PORT, print_config
+
+# Built frontend path (created by: cd client && npm run build)
+CLIENT_DIST = Path(__file__).parent.parent / "client" / "dist"
 import pipeline
 
 logging.basicConfig(
@@ -115,6 +120,22 @@ async def generate_image(
     finally:
         if temp_path and temp_path.exists():
             temp_path.unlink(missing_ok=True)
+
+
+# Serve built frontend (if it exists)
+if CLIENT_DIST.is_dir():
+    # Serve static assets (JS, CSS, images)
+    app.mount("/assets", StaticFiles(directory=CLIENT_DIST / "assets"), name="assets")
+
+    # SPA fallback: serve index.html for all non-API routes
+    @app.get("/{path:path}")
+    async def serve_frontend(path: str):
+        # Try to serve the exact file first
+        file_path = CLIENT_DIST / path
+        if path and file_path.is_file():
+            return FileResponse(file_path)
+        # Otherwise serve index.html (SPA routing)
+        return FileResponse(CLIENT_DIST / "index.html")
 
 
 if __name__ == "__main__":

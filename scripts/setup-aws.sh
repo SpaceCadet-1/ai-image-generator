@@ -73,6 +73,9 @@ echo "Node $(node --version), npm $(npm --version)"
 
 cd "$REPO_DIR/client"
 npm install
+echo "Building frontend..."
+npm run build
+echo "Frontend built to client/dist/"
 
 # ── Done ──
 echo ""

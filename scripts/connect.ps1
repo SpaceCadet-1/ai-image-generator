@@ -2,14 +2,14 @@
 #
 # Prerequisites:
 #   1. AWS CLI v2: https://aws.amazon.com/cli/
-#   2. Session Manager plugin: https://docs.aws.amazon.com/systems-manager/latest/userguide/session-manager-working-with-install-plugin.html
+#   2. Session Manager plugin
 #   3. AWS SSO configured: aws configure sso
 #
 # Usage:
+#   .\scripts\connect.ps1 i-0abc123def456
 #   .\scripts\connect.ps1 -InstanceId i-0abc123def456 -Profile SysmexAI
-#   .\scripts\connect.ps1 i-0abc123def456 SysmexAI
 #
-# Then open http://localhost:5173 in your browser.
+# Then open http://localhost:3001 in your browser.
 
 param(
     [Parameter(Mandatory=$true, Position=0)]
@@ -45,74 +45,16 @@ if ($missing.Count -gt 0) {
     exit 1
 }
 
-# Start both tunnels as background jobs
-Write-Host "Starting port tunnels..." -ForegroundColor Green
-Write-Host "  localhost:3001 -> instance:3001 (FastAPI backend)" -ForegroundColor Green
-Write-Host "  localhost:5173 -> instance:5173 (Vite frontend)" -ForegroundColor Magenta
+Write-Host "Starting tunnel: localhost:3001 -> instance:3001" -ForegroundColor Green
+Write-Host ""
+Write-Host "Open http://localhost:3001 in your browser." -ForegroundColor Cyan
+Write-Host "Press Ctrl+C to disconnect." -ForegroundColor DarkGray
 Write-Host ""
 
-$apiTunnel = Start-Job -Name "SSM-API" -ScriptBlock {
-    param($id, $prof, $reg)
-    aws ssm start-session `
-        --target $id `
-        --document-name AWS-StartPortForwardingSession `
-        --parameters "portNumber=3001,localPortNumber=3001" `
-        --profile $prof `
-        --region $reg 2>&1
-} -ArgumentList $InstanceId, $Profile, $Region
-
-$webTunnel = Start-Job -Name "SSM-WEB" -ScriptBlock {
-    param($id, $prof, $reg)
-    aws ssm start-session `
-        --target $id `
-        --document-name AWS-StartPortForwardingSession `
-        --parameters "portNumber=5173,localPortNumber=5173" `
-        --profile $prof `
-        --region $reg 2>&1
-} -ArgumentList $InstanceId, $Profile, $Region
-
-# Wait a moment for tunnels to establish
-Start-Sleep -Seconds 3
-
-# Check tunnel status
-$apiState = (Get-Job -Name "SSM-API").State
-$webState = (Get-Job -Name "SSM-WEB").State
-
-if ($apiState -eq "Running" -and $webState -eq "Running") {
-    Write-Host "Tunnels active!" -ForegroundColor Green
-    Write-Host ""
-    Write-Host "Open http://localhost:5173 in your browser." -ForegroundColor Cyan
-    Write-Host ""
-    Write-Host "Press Ctrl+C to disconnect." -ForegroundColor DarkGray
-    Write-Host ""
-} else {
-    Write-Host "Warning: tunnel state - API=$apiState, WEB=$webState" -ForegroundColor Yellow
-    # Show any errors
-    Receive-Job -Name "SSM-API" -ErrorAction SilentlyContinue | ForEach-Object { Write-Host "[API] $_" -ForegroundColor Yellow }
-    Receive-Job -Name "SSM-WEB" -ErrorAction SilentlyContinue | ForEach-Object { Write-Host "[WEB] $_" -ForegroundColor Yellow }
-}
-
-# Keep running, stream output, until Ctrl+C
-try {
-    while ($true) {
-        foreach ($name in @("SSM-API", "SSM-WEB")) {
-            $job = Get-Job -Name $name -ErrorAction SilentlyContinue
-            if ($job -and $job.HasMoreData) {
-                Receive-Job -Job $job -ErrorAction SilentlyContinue | ForEach-Object {
-                    $text = "$_"
-                    if ($text.Trim() -ne "") { Write-Host "[$name] $text" -ForegroundColor DarkGray }
-                }
-            }
-        }
-        Start-Sleep -Milliseconds 500
-    }
-}
-finally {
-    Write-Host ""
-    Write-Host "Closing tunnels..." -ForegroundColor Red
-    Get-Job -Name "SSM-API" -ErrorAction SilentlyContinue | Stop-Job -ErrorAction SilentlyContinue | Remove-Job -Force -ErrorAction SilentlyContinue
-    Get-Job -Name "SSM-WEB" -ErrorAction SilentlyContinue | Stop-Job -ErrorAction SilentlyContinue | Remove-Job -Force -ErrorAction SilentlyContinue
-    Get-Job | Where-Object { $_.Name -like "SSM-*" } | Stop-Job -ErrorAction SilentlyContinue
-    Get-Job | Where-Object { $_.Name -like "SSM-*" } | Remove-Job -Force -ErrorAction SilentlyContinue
-    Write-Host "Disconnected." -ForegroundColor Red
-}
+# Run tunnel in foreground (simpler, more reliable)
+aws ssm start-session `
+    --target $InstanceId `
+    --document-name AWS-StartPortForwardingSession `
+    --parameters "portNumber=3001,localPortNumber=3001" `
+    --profile $Profile `
+    --region $Region
