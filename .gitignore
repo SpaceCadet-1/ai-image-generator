@@ -5,6 +5,7 @@ dist/
 *.log
 package-lock.json
 uploads/
+.pids
 .claude/
 
 # Python
