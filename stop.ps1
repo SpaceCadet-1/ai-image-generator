@@ -19,13 +19,13 @@ foreach ($pid in $apiPids) {
     }
 }
 
-# Kill processes on port 3000 (Vite frontend)
-$webPids = Get-NetTCPConnection -LocalPort 3000 -ErrorAction SilentlyContinue |
+# Kill processes on port 5173 (Vite frontend)
+$webPids = Get-NetTCPConnection -LocalPort 5173 -ErrorAction SilentlyContinue |
     Select-Object -ExpandProperty OwningProcess -Unique
 foreach ($pid in $webPids) {
     $proc = Get-Process -Id $pid -ErrorAction SilentlyContinue
     if ($proc) {
-        Write-Host "[WEB] Killing $($proc.ProcessName) (PID $pid) on port 3000" -ForegroundColor Magenta
+        Write-Host "[WEB] Killing $($proc.ProcessName) (PID $pid) on port 5173" -ForegroundColor Magenta
         Stop-Process -Id $pid -Force -ErrorAction SilentlyContinue
         $stopped++
     }

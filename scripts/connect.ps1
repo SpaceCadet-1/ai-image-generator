@@ -9,7 +9,7 @@
 #   .\scripts\connect.ps1 -InstanceId i-0abc123def456 -Profile SysmexAI
 #   .\scripts\connect.ps1 i-0abc123def456 SysmexAI
 #
-# Then open http://localhost:3000 in your browser.
+# Then open http://localhost:5173 in your browser.
 
 param(
     [Parameter(Mandatory=$true, Position=0)]
@@ -48,7 +48,7 @@ if ($missing.Count -gt 0) {
 # Start both tunnels as background jobs
 Write-Host "Starting port tunnels..." -ForegroundColor Green
 Write-Host "  localhost:3001 -> instance:3001 (FastAPI backend)" -ForegroundColor Green
-Write-Host "  localhost:3000 -> instance:3000 (Vite frontend)" -ForegroundColor Magenta
+Write-Host "  localhost:5173 -> instance:5173 (Vite frontend)" -ForegroundColor Magenta
 Write-Host ""
 
 $apiTunnel = Start-Job -Name "SSM-API" -ScriptBlock {
@@ -66,7 +66,7 @@ $webTunnel = Start-Job -Name "SSM-WEB" -ScriptBlock {
     aws ssm start-session `
         --target $id `
         --document-name AWS-StartPortForwardingSession `
-        --parameters "portNumber=3000,localPortNumber=3000" `
+        --parameters "portNumber=5173,localPortNumber=5173" `
         --profile $prof `
         --region $reg 2>&1
 } -ArgumentList $InstanceId, $Profile, $Region
@@ -81,7 +81,7 @@ $webState = (Get-Job -Name "SSM-WEB").State
 if ($apiState -eq "Running" -and $webState -eq "Running") {
     Write-Host "Tunnels active!" -ForegroundColor Green
     Write-Host ""
-    Write-Host "Open http://localhost:3000 in your browser." -ForegroundColor Cyan
+    Write-Host "Open http://localhost:5173 in your browser." -ForegroundColor Cyan
     Write-Host ""
     Write-Host "Press Ctrl+C to disconnect." -ForegroundColor DarkGray
     Write-Host ""
