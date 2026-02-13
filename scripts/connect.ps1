@@ -1,4 +1,4 @@
-# connect.ps1 — Tunnel to AWS instance via SSM (no SSH needed)
+# connect.ps1 - Tunnel to AWS instance via SSM (no SSH needed)
 #
 # Prerequisites:
 #   1. AWS CLI v2: https://aws.amazon.com/cli/
@@ -74,7 +74,7 @@ if ($apiState -eq "Running" -and $webState -eq "Running") {
     Write-Host "Press Ctrl+C to disconnect." -ForegroundColor DarkGray
     Write-Host ""
 } else {
-    Write-Host "Warning: tunnel state — API=$apiState, WEB=$webState" -ForegroundColor Yellow
+    Write-Host "Warning: tunnel state - API=$apiState, WEB=$webState" -ForegroundColor Yellow
     # Show any errors
     Receive-Job -Name "SSM-API" -ErrorAction SilentlyContinue | ForEach-Object { Write-Host "[API] $_" -ForegroundColor Yellow }
     Receive-Job -Name "SSM-WEB" -ErrorAction SilentlyContinue | ForEach-Object { Write-Host "[WEB] $_" -ForegroundColor Yellow }
