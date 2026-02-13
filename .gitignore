@@ -6,6 +6,15 @@ dist/
 package-lock.json
 uploads/
 .claude/
+
+# Python
 __pycache__/
 *.pyc
 .venv/
+
+# Model weights (downloaded by scripts/download_models.py)
+server/models/
+*.pt
+*.safetensors
+*.bin
+*.onnx

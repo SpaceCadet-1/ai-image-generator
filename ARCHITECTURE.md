@@ -5,60 +5,111 @@
 | Layer | Technology | Port |
 |-------|-----------|------|
 | Frontend | React 18 + Vite 5 | 3000 |
-| Backend | Express 4 (ES modules) | 3001 |
-| AI | OpenAI SDK v4 → DALL-E 3 | — |
+| Backend | Python FastAPI + Uvicorn | 3001 |
+| AI (CPU) | Stable Diffusion 1.5 + IP-Adapter FaceID Plus V2 | — |
+| AI (GPU) | Stable Diffusion XL + IP-Adapter FaceID Plus V2 | — |
+| Face Detection | InsightFace (antelopev2, ONNX) | — |
 
-No database, authentication, or state persistence.
+No database, authentication, or external API calls. Fully offline after model download.
 
 ## Project Structure
 
 ```
 ai-image-generator/
-├── .gitignore               # node_modules, .env, dist, .DS_Store, *.log
-├── README.md                # Setup instructions
-├── ARCHITECTURE.md          # This file
-├── client/                  # React frontend (Vite)
-│   ├── package.json         # react, react-dom, vite, @vitejs/plugin-react
-│   ├── vite.config.js       # Dev server on port 3000
-│   ├── index.html           # HTML shell
+├── .gitignore
+├── README.md
+├── ARCHITECTURE.md
+├── client/                     # React frontend (Vite)
+│   ├── package.json
+│   ├── vite.config.js
+│   ├── index.html
 │   └── src/
-│       ├── main.jsx         # Entry point — renders <App /> into #root
-│       ├── App.jsx          # Single-component app with prompt builder UI
-│       └── App.css          # Dark theme, gradient styling, responsive
-└── server/                  # Express backend
-    ├── package.json         # express, cors, dotenv, openai
-    ├── index.js             # API server with single endpoint
-    └── .env                 # OPENAI_API_KEY (gitignored)
+│       ├── main.jsx            # Entry point
+│       ├── App.jsx             # Single-component app with prompt builder UI
+│       └── App.css             # Dark theme, gradient styling, responsive
+├── server/                     # Python FastAPI backend
+│   ├── main.py                 # FastAPI server — replaces Express index.js
+│   ├── pipeline.py             # Model loading + inference (text & face modes)
+│   ├── config.py               # Device-aware config (CPU/GPU auto-selection)
+│   ├── requirements.txt        # Python dependencies
+│   ├── models/                 # Downloaded weights (gitignored)
+│   │   ├── diffusers/          # HuggingFace model cache
+│   │   ├── ip-adapter-faceid/  # FaceID adapter + LoRA weights
+│   │   └── insightface/        # InsightFace ONNX models
+│   └── uploads/                # Temp upload directory (gitignored)
+├── scripts/
+│   └── download_models.py      # Downloads all models from HuggingFace
+└── server_legacy/              # Archived Express/OpenAI server
+    ├── index.js
+    └── package.json
 ```
 
 ## Server
 
-**File:** `server/index.js`
-
 ### Endpoint
 
-`POST /api/generate`
+`POST /api/generate` (multipart/form-data)
 
-**Request body:**
-```json
-{ "prompt": "a sunset over mountains, watercolor style" }
-```
+**Request fields:**
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `prompt` | string | yes | Text description of the image |
+| `referenceImage` | file | no | Face reference photo (PNG/JPG/WebP, max 25MB) |
+| `faceStrength` | float | no | Face likeness strength 0.0-1.0 (default 0.6) |
 
 **Success response (200):**
 ```json
-{ "imageUrl": "https://oaidalleapiprodscus.blob.core.windows.net/..." }
+{ "imageUrl": "data:image/png;base64,..." }
 ```
 
 **Error responses:**
-- `400` — prompt missing or empty: `{ "error": "Prompt is required" }`
-- `500` — OpenAI API failure: `{ "error": "<error message>" }`
+- `400` — prompt missing, no face detected, invalid file type/size
+- `500` — model inference failure
+- Response body: `{ "detail": "<error message>" }`
 
-### Configuration
+### Generation Modes
 
-- CORS enabled for all origins
-- OpenAI client initialized from `process.env.OPENAI_API_KEY`
-- DALL-E 3 model, 1024x1024 resolution, 1 image per request
-- Image URLs returned by OpenAI are temporary (~1 hour expiry)
+1. **Text-to-image** — no reference image uploaded. Uses base SD pipeline.
+2. **Face-likeness** — reference image uploaded. Extracts face embedding via InsightFace, feeds it through IP-Adapter FaceID Plus V2 to preserve identity in the generated image.
+
+### Device-Aware Configuration (`config.py`)
+
+Automatically selects model variant based on hardware:
+
+| Setting | CPU (dev) | CUDA (prod) |
+|---------|-----------|-------------|
+| Base model | SD 1.5 | SDXL |
+| Image size | 512x512 | 1024x1024 |
+| Inference steps | 25 | 30 |
+| Dtype | float32 | float16 |
+| Face adapter | sd15 variant | sdxl variant |
+
+Override with `DEVICE_MODE=cpu` or `DEVICE_MODE=cuda` environment variable.
+
+## Model Architecture
+
+### IP-Adapter FaceID Plus V2
+
+Combines two signals for face-likeness preservation:
+1. **InsightFace embedding** — 512-dim face identity vector from antelopev2 ONNX model
+2. **CLIP image features** — visual features from CLIP ViT-H-14 encoder
+
+These are injected into the diffusion process via:
+- **LoRA weights** — fine-tuned cross-attention layers (fused at scale 0.5)
+- **IP-Adapter** — decoupled cross-attention for image prompt conditioning
+
+The `faceStrength` parameter (0.0-1.0) controls the IP-Adapter scale — higher values produce closer likeness but less prompt adherence.
+
+### Model Downloads
+
+| Component | Size | Used by |
+|-----------|------|---------|
+| SD 1.5 base | ~2 GB | CPU mode |
+| SDXL base | ~6.9 GB | GPU mode |
+| IP-Adapter FaceID Plus V2 (SD 1.5) | ~208 MB | CPU mode |
+| IP-Adapter FaceID Plus V2 (SDXL) | ~400 MB | GPU mode |
+| CLIP ViT-H-14 image encoder | ~1.7 GB | Both |
+| InsightFace antelopev2 | ~300 MB | Both |
 
 ## Client
 
@@ -73,38 +124,24 @@ ai-image-generator/
 | `selectedPreset` | object/null | Currently active style preset |
 | `mood` | string | Selected mood/atmosphere |
 | `avoid` | string | Negative prompt (things to exclude) |
-| `imageUrl` | string | Generated image URL from API |
+| `imageUrl` | string | Generated image (base64 data URI) |
 | `loading` | boolean | Request in-flight flag |
 | `error` | string | Error message display |
 | `generatedPrompt` | string | Final assembled prompt shown to user |
+| `referenceImage` | File/null | Uploaded face reference photo |
+| `imagePreview` | string | Data URI preview of reference image |
+| `faceStrength` | number | Face likeness strength (0.0-1.0) |
 
 ### UI Sections
 
 1. **Subject** — textarea for the main image description
-2. **Style Presets** — 12 clickable buttons, each maps to curated keywords:
-   - Photorealistic, Digital Art, Watercolor, Oil Painting, Anime, Cinematic, 3D Render, Pixel Art, Sketch, Fantasy, Minimalist, Vintage
-3. **Style Keywords** — freeform text input; editing clears the active preset
-4. **Mood / Atmosphere** — 8 toggleable pill buttons:
-   - Bright & Cheerful, Dark & Moody, Peaceful & Calm, Dramatic & Intense, Mysterious, Whimsical & Playful, Elegant & Sophisticated, Gritty & Raw
-5. **What to Avoid** — text input for negative prompt terms
-6. **Generate Image** — button that assembles the prompt and calls the API
-7. **Results** — displays the assembled prompt text and rendered image
-
-### Prompt Assembly
-
-`buildPrompt()` concatenates parts with commas:
-```
-<subject>, <styleKeywords>, <mood> mood
-```
-If "avoid" text is present, appends:
-```
-. Without: <avoid text>
-```
-
-Example output:
-```
-a castle on a hill, watercolor painting, soft edges, artistic, painted, dark & moody mood. Without: people, text
-```
+2. **Reference Image** — drag-and-drop / file picker with preview
+3. **Face Strength** — range slider (appears when reference image is uploaded)
+4. **Style Presets** — 12 clickable buttons with curated keywords
+5. **Style Keywords** — freeform text input
+6. **Mood / Atmosphere** — 8 toggleable pill buttons
+7. **What to Avoid** — text input for negative prompt terms
+8. **Generate Image** — button that assembles the prompt and calls the API
 
 ### Data Flow
 
@@ -113,59 +150,55 @@ User fills form
     ↓
 buildPrompt() assembles final prompt string
     ↓
-POST http://localhost:3001/api/generate  { prompt }
+POST http://localhost:3001/api/generate  (FormData: prompt, referenceImage?, faceStrength?)
     ↓
-Express validates → OpenAI DALL-E 3 API call
+FastAPI validates → pipeline.generate_*() → Stable Diffusion inference
     ↓
-Returns { imageUrl } → displayed in <img> tag
-```
-
-## Styling
-
-**File:** `client/src/App.css`
-
-- Dark gradient background: `#1a1a2e → #16213e`
-- Gradient heading: cyan (`#00d4ff`) → purple (`#7b2cbf`)
-- Glassmorphic form card with subtle border
-- Preset buttons: grid layout, highlight on selection
-- Mood buttons: pill-shaped, toggle on/off
-- Generate button: full-width gradient with hover lift effect
-- Image output: rounded corners with cyan glow shadow
-- Responsive breakpoint at 600px (3-column preset grid, smaller padding)
-
-## Running the Application
-
-```bash
-# 1. Install dependencies
-cd server && npm install
-cd ../client && npm install
-
-# 2. Configure API key
-# Create server/.env with: OPENAI_API_KEY=sk-...
-
-# 3. Start backend (terminal 1)
-cd server && npm start
-
-# 4. Start frontend (terminal 2)
-cd client && npm run dev
-
-# 5. Open http://localhost:3000
+Returns { imageUrl: "data:image/png;base64,..." } → displayed in <img> tag
 ```
 
 ## Dependencies
 
-### Server
-| Package | Version | Purpose |
-|---------|---------|---------|
-| express | ^4.18.2 | HTTP server |
-| cors | ^2.8.5 | Cross-origin requests |
-| dotenv | ^16.3.1 | Environment variable loading |
-| openai | ^4.20.1 | OpenAI API client |
+### Server (Python)
 
-### Client
+| Package | Purpose |
+|---------|---------|
+| fastapi | HTTP server framework |
+| uvicorn | ASGI server |
+| python-multipart | Form/file upload parsing |
+| torch | PyTorch deep learning framework |
+| diffusers | HuggingFace diffusion model pipelines |
+| transformers | CLIP model loading |
+| accelerate | Model offloading and memory optimization |
+| insightface | Face detection and embedding extraction |
+| onnxruntime | ONNX model inference for InsightFace |
+| Pillow | Image processing |
+| huggingface-hub | Model downloading |
+
+### Client (Node.js)
+
 | Package | Version | Purpose |
 |---------|---------|---------|
 | react | ^18.2.0 | UI framework |
 | react-dom | ^18.2.0 | DOM rendering |
 | vite | ^5.0.8 | Build tool / dev server |
 | @vitejs/plugin-react | ^4.2.1 | React JSX support |
+
+## Running the Application
+
+```bash
+# 1. Set up Python environment
+cd server && python -m venv .venv && .venv\Scripts\activate
+pip install -r requirements.txt
+
+# 2. Download models (~4 GB for CPU)
+python ../scripts/download_models.py
+
+# 3. Start backend
+uvicorn main:app --host 0.0.0.0 --port 3001
+
+# 4. Start frontend (new terminal)
+cd client && npm install && npm run dev
+
+# 5. Open http://localhost:3000
+```

@@ -34,71 +34,6 @@ h1 {
   margin-bottom: 20px;
 }
 
-/* Mode Toggle */
-.mode-toggle {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 0;
-  margin-bottom: 30px;
-}
-
-.mode-btn {
-  padding: 10px 24px;
-  font-size: 0.9rem;
-  font-weight: 600;
-  border: 2px solid #333;
-  background: transparent;
-  color: #888;
-  cursor: pointer;
-  transition: all 0.2s;
-}
-
-.mode-btn:first-child {
-  border-radius: 8px 0 0 8px;
-  border-right: 1px solid #333;
-}
-
-.mode-btn:nth-child(2) {
-  border-radius: 0 8px 8px 0;
-  border-left: 1px solid #333;
-}
-
-.mode-btn:hover:not(:disabled) {
-  border-color: #00d4ff;
-  color: #00d4ff;
-}
-
-.mode-btn.active {
-  background: linear-gradient(90deg, rgba(0, 212, 255, 0.2), rgba(123, 44, 191, 0.2));
-  border-color: #00d4ff;
-  color: #fff;
-}
-
-.mode-btn:disabled {
-  opacity: 0.4;
-  cursor: not-allowed;
-}
-
-.mode-status {
-  margin-left: 14px;
-  font-size: 0.8rem;
-  font-weight: 500;
-}
-
-.mode-status.ready {
-  color: #4ade80;
-}
-
-.mode-status.loading {
-  color: #facc15;
-}
-
-.mode-status.offline,
-.mode-status.error {
-  color: #666;
-}
-
 .form-section {
   background: rgba(255, 255, 255, 0.03);
   border: 1px solid rgba(255, 255, 255, 0.1);
@@ -227,6 +162,59 @@ input:disabled {
   margin-top: 8px;
   font-size: 0.8rem;
   color: #7b2cbf;
+}
+
+.face-strength-control {
+  margin-top: 10px;
+}
+
+.face-strength-control label {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-size: 0.85rem;
+  color: #aaa;
+}
+
+.face-strength-slider {
+  flex: 1;
+  height: 6px;
+  -webkit-appearance: none;
+  appearance: none;
+  background: #333;
+  border-radius: 3px;
+  outline: none;
+  cursor: pointer;
+}
+
+.face-strength-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, #00d4ff, #7b2cbf);
+  cursor: pointer;
+}
+
+.face-strength-slider::-moz-range-thumb {
+  width: 18px;
+  height: 18px;
+  border: none;
+  border-radius: 50%;
+  background: linear-gradient(135deg, #00d4ff, #7b2cbf);
+  cursor: pointer;
+}
+
+.face-strength-slider:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.face-strength-hint {
+  display: block;
+  margin-top: 4px;
+  font-size: 0.75rem;
+  color: #555;
 }
 
 /* Style Presets Grid */

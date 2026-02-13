@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect } from 'react';
+import { useState, useRef } from 'react';
 
 const STYLE_PRESETS = [
   { name: 'Photorealistic', keywords: 'photorealistic, highly detailed, 8k, professional photography' },
@@ -41,24 +41,8 @@ function App() {
   const [generatedPrompt, setGeneratedPrompt] = useState('');
   const [referenceImage, setReferenceImage] = useState(null);
   const [imagePreview, setImagePreview] = useState('');
-  const [mode, setMode] = useState('api');
-  const [localStatus, setLocalStatus] = useState('offline');
+  const [faceStrength, setFaceStrength] = useState(0.6);
   const fileInputRef = useRef(null);
-
-  useEffect(() => {
-    const checkLocalStatus = async () => {
-      try {
-        const resp = await fetch('http://localhost:3001/api/local-status');
-        const data = await resp.json();
-        setLocalStatus(data.status);
-      } catch {
-        setLocalStatus('offline');
-      }
-    };
-    checkLocalStatus();
-    const interval = setInterval(checkLocalStatus, 10000);
-    return () => clearInterval(interval);
-  }, []);
 
   const handlePresetClick = (preset) => {
     if (selectedPreset?.name === preset.name) {
@@ -149,9 +133,9 @@ function App() {
     try {
       const formData = new FormData();
       formData.append('prompt', prompt);
-      formData.append('mode', mode);
       if (referenceImage) {
         formData.append('referenceImage', referenceImage);
+        formData.append('faceStrength', faceStrength);
       }
 
       const response = await fetch('http://localhost:3001/api/generate', {
@@ -162,7 +146,7 @@ function App() {
       const data = await response.json();
 
       if (!response.ok) {
-        throw new Error(data.error || 'Failed to generate image');
+        throw new Error(data.detail || data.error || 'Failed to generate image');
       }
 
       setImageUrl(data.imageUrl);
@@ -177,44 +161,10 @@ function App() {
     }
   };
 
-  const getModelNote = () => {
-    if (mode === 'local') {
-      return referenceImage
-        ? 'Using SDXL img2img (local GPU)'
-        : 'Using SDXL text-to-image (local GPU)';
-    }
-    return referenceImage ? 'Using gpt-image-1 (image edit mode)' : null;
-  };
-
-  const modelNote = getModelNote();
-
   return (
     <div className="container">
       <h1>AI Image Generator</h1>
       <p className="subtitle">Fine-tune your image with detailed controls</p>
-
-      <div className="mode-toggle">
-        <button
-          className={`mode-btn ${mode === 'api' ? 'active' : ''}`}
-          onClick={() => setMode('api')}
-          disabled={loading}
-        >
-          OpenAI API
-        </button>
-        <button
-          className={`mode-btn ${mode === 'local' ? 'active' : ''}`}
-          onClick={() => setMode('local')}
-          disabled={loading || localStatus === 'offline'}
-          title={localStatus === 'offline' ? 'Local GPU server is not running' : ''}
-        >
-          Local GPU
-        </button>
-        <span className={`mode-status ${localStatus}`}>
-          {localStatus === 'ready' ? 'GPU Ready' :
-           localStatus === 'loading' ? 'Loading Model...' :
-           'GPU Offline'}
-        </span>
-      </div>
 
       <div className="form-section">
         <div className="input-group">
@@ -261,8 +211,28 @@ function App() {
               </button>
             </div>
           )}
-          {modelNote && (
-            <p className="model-note">{modelNote}</p>
+          {referenceImage && (
+            <>
+              <p className="model-note">Face-likeness mode (IP-Adapter FaceID)</p>
+              <div className="face-strength-control">
+                <label>
+                  Face Strength: {faceStrength.toFixed(1)}
+                  <input
+                    type="range"
+                    min="0"
+                    max="1"
+                    step="0.1"
+                    value={faceStrength}
+                    onChange={(e) => setFaceStrength(parseFloat(e.target.value))}
+                    disabled={loading}
+                    className="face-strength-slider"
+                  />
+                </label>
+                <span className="face-strength-hint">
+                  Lower = more creative, Higher = closer likeness
+                </span>
+              </div>
+            </>
           )}
         </div>
 
@@ -324,9 +294,7 @@ function App() {
         </div>
 
         <button className="generate-btn" onClick={handleGenerate} disabled={loading}>
-          {loading
-            ? mode === 'local' ? 'Generating on GPU...' : 'Generating...'
-            : 'Generate Image'}
+          {loading ? 'Generating...' : 'Generate Image'}
         </button>
       </div>
 
@@ -335,7 +303,7 @@ function App() {
       {loading && (
         <div className="loading">
           <div className="spinner"></div>
-          <p>{mode === 'local' ? 'Running SDXL on your GPU...' : 'Creating your image...'}</p>
+          <p>Creating your image...</p>
         </div>
       )}
 
