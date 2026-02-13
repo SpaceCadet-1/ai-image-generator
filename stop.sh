@@ -22,8 +22,8 @@ if [ -f "$PIDFILE" ]; then
     rm -f "$PIDFILE"
 fi
 
-# Also kill anything on ports 3001 and 5173 (fallback)
-for port in 3001 5173; do
+# Also kill anything on ports 3001 and 3000 (fallback)
+for port in 3001 3000; do
     pids=$(lsof -ti ":$port" 2>/dev/null || true)
     for pid in $pids; do
         if kill -0 "$pid" 2>/dev/null; then

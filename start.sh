@@ -22,7 +22,7 @@ echo "[API] FastAPI started (PID $API_PID) on http://localhost:3001"
 cd "$REPO_DIR/client"
 npx vite --host 0.0.0.0 &
 WEB_PID=$!
-echo "[WEB] Vite started (PID $WEB_PID) on http://localhost:5173"
+echo "[WEB] Vite started (PID $WEB_PID) on http://localhost:3000"
 
 # Save PIDs for stop.sh
 echo "$API_PID" > "$PIDFILE"
@@ -33,7 +33,7 @@ echo "PIDs saved to .pids — run 'bash stop.sh' to stop."
 echo ""
 echo "Connect from your laptop:"
 echo "  .\\scripts\\connect.ps1 <instance-id>"
-echo "  Then open http://localhost:5173"
+echo "  Then open http://localhost:3000"
 echo ""
 
 # Wait for both — Ctrl+C kills this script, then stop.sh cleans up

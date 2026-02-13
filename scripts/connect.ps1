@@ -3,17 +3,23 @@
 # Prerequisites:
 #   1. AWS CLI v2: https://aws.amazon.com/cli/
 #   2. Session Manager plugin: https://docs.aws.amazon.com/systems-manager/latest/userguide/session-manager-working-with-install-plugin.html
-#   3. IAM permissions for ssm:StartSession
+#   3. AWS SSO configured: aws configure sso
 #
 # Usage:
-#   .\scripts\connect.ps1 -InstanceId i-0abc123def456
-#   .\scripts\connect.ps1 i-0abc123def456
+#   .\scripts\connect.ps1 -InstanceId i-0abc123def456 -Profile SysmexAI
+#   .\scripts\connect.ps1 i-0abc123def456 SysmexAI
 #
-# Then open http://localhost:5173 in your browser.
+# Then open http://localhost:3000 in your browser.
 
 param(
     [Parameter(Mandatory=$true, Position=0)]
-    [string]$InstanceId
+    [string]$InstanceId,
+
+    [Parameter(Position=1)]
+    [string]$Profile = "SysmexAI",
+
+    [Parameter()]
+    [string]$Region = "us-east-1"
 )
 
 Write-Host ""
@@ -22,6 +28,8 @@ Write-Host "  Connecting to AWS instance" -ForegroundColor Cyan
 Write-Host "=================================" -ForegroundColor Cyan
 Write-Host ""
 Write-Host "Instance: $InstanceId" -ForegroundColor Yellow
+Write-Host "Profile:  $Profile" -ForegroundColor Yellow
+Write-Host "Region:   $Region" -ForegroundColor Yellow
 Write-Host ""
 
 # Check prerequisites
@@ -40,24 +48,28 @@ if ($missing.Count -gt 0) {
 # Start both tunnels as background jobs
 Write-Host "Starting port tunnels..." -ForegroundColor Green
 Write-Host "  localhost:3001 -> instance:3001 (FastAPI backend)" -ForegroundColor Green
-Write-Host "  localhost:5173 -> instance:5173 (Vite frontend)" -ForegroundColor Magenta
+Write-Host "  localhost:3000 -> instance:3000 (Vite frontend)" -ForegroundColor Magenta
 Write-Host ""
 
 $apiTunnel = Start-Job -Name "SSM-API" -ScriptBlock {
-    param($id)
+    param($id, $prof, $reg)
     aws ssm start-session `
         --target $id `
         --document-name AWS-StartPortForwardingSession `
-        --parameters "portNumber=3001,localPortNumber=3001" 2>&1
-} -ArgumentList $InstanceId
+        --parameters "portNumber=3001,localPortNumber=3001" `
+        --profile $prof `
+        --region $reg 2>&1
+} -ArgumentList $InstanceId, $Profile, $Region
 
 $webTunnel = Start-Job -Name "SSM-WEB" -ScriptBlock {
-    param($id)
+    param($id, $prof, $reg)
     aws ssm start-session `
         --target $id `
         --document-name AWS-StartPortForwardingSession `
-        --parameters "portNumber=5173,localPortNumber=5173" 2>&1
-} -ArgumentList $InstanceId
+        --parameters "portNumber=3000,localPortNumber=3000" `
+        --profile $prof `
+        --region $reg 2>&1
+} -ArgumentList $InstanceId, $Profile, $Region
 
 # Wait a moment for tunnels to establish
 Start-Sleep -Seconds 3
@@ -69,7 +81,7 @@ $webState = (Get-Job -Name "SSM-WEB").State
 if ($apiState -eq "Running" -and $webState -eq "Running") {
     Write-Host "Tunnels active!" -ForegroundColor Green
     Write-Host ""
-    Write-Host "Open http://localhost:5173 in your browser." -ForegroundColor Cyan
+    Write-Host "Open http://localhost:3000 in your browser." -ForegroundColor Cyan
     Write-Host ""
     Write-Host "Press Ctrl+C to disconnect." -ForegroundColor DarkGray
     Write-Host ""
@@ -100,7 +112,6 @@ finally {
     Write-Host "Closing tunnels..." -ForegroundColor Red
     Get-Job -Name "SSM-API" -ErrorAction SilentlyContinue | Stop-Job -ErrorAction SilentlyContinue | Remove-Job -Force -ErrorAction SilentlyContinue
     Get-Job -Name "SSM-WEB" -ErrorAction SilentlyContinue | Stop-Job -ErrorAction SilentlyContinue | Remove-Job -Force -ErrorAction SilentlyContinue
-    # Cleanup any lingering jobs
     Get-Job | Where-Object { $_.Name -like "SSM-*" } | Stop-Job -ErrorAction SilentlyContinue
     Get-Job | Where-Object { $_.Name -like "SSM-*" } | Remove-Job -Force -ErrorAction SilentlyContinue
     Write-Host "Disconnected." -ForegroundColor Red
