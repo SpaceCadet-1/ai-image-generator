@@ -6,18 +6,15 @@ set -e
 REPO_DIR="$(cd "$(dirname "$0")" && pwd)"
 PIDFILE="$REPO_DIR/.pids"
 
-# Activate conda pytorch env (Deep Learning AMI)
-source activate pytorch 2>/dev/null || conda activate pytorch 2>/dev/null || true
-
 echo ""
 echo "================================="
 echo "  AI Image Generator — Starting"
 echo "================================="
 echo ""
 
-# Start FastAPI backend
+# Start FastAPI backend (uses venv)
 cd "$REPO_DIR/server"
-python -m uvicorn main:app --host 0.0.0.0 --port 3001 &
+.venv/bin/python -m uvicorn main:app --host 0.0.0.0 --port 3001 &
 API_PID=$!
 echo "[API] FastAPI started (PID $API_PID) on http://localhost:3001"
 
@@ -34,8 +31,8 @@ echo "$WEB_PID" >> "$PIDFILE"
 echo ""
 echo "PIDs saved to .pids — run 'bash stop.sh' to stop."
 echo ""
-echo "From your laptop:"
-echo "  ssh -i <key>.pem -L 5173:localhost:5173 -L 3001:localhost:3001 ubuntu@<ip>"
+echo "Connect from your laptop:"
+echo "  .\\scripts\\connect.ps1 <instance-id>"
 echo "  Then open http://localhost:5173"
 echo ""
 

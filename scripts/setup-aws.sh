@@ -1,6 +1,6 @@
 #!/bin/bash
-# setup-aws.sh — One-time setup on AWS Deep Learning AMI (Ubuntu 24.04, PyTorch 2.9)
-# Instance: g5.xlarge (A10G 24GB VRAM)
+# setup-aws.sh — One-time setup on AWS Deep Learning AMI (Ubuntu 24.04)
+# Instance: g5.xlarge (A10G 24GB VRAM, CUDA 13.0)
 #
 # Usage: bash scripts/setup-aws.sh
 set -e
@@ -13,19 +13,30 @@ echo "================================="
 echo ""
 echo "Repo: $REPO_DIR"
 
-# ── 1. Activate the Deep Learning AMI's PyTorch conda env ──
+# ── 1. Create Python venv ──
 echo ""
-echo "[1/4] Activating PyTorch conda environment..."
-source activate pytorch 2>/dev/null || conda activate pytorch
-python --version
-python -c "import torch; print(f'PyTorch {torch.__version__}, CUDA available: {torch.cuda.is_available()}')"
+echo "[1/4] Setting up Python virtual environment..."
+cd "$REPO_DIR/server"
 
-# ── 2. Install Python dependencies (torch is already installed with CUDA) ──
-echo ""
-echo "[2/4] Installing Python dependencies..."
+if [ ! -d ".venv" ]; then
+    python3 -m venv .venv
+fi
+source .venv/bin/activate
 pip install --upgrade pip
 
-# Install everything except torch (already on the AMI with CUDA support)
+python --version
+echo "venv: $VIRTUAL_ENV"
+
+# ── 2. Install Python dependencies ──
+echo ""
+echo "[2/4] Installing Python dependencies..."
+
+# Install PyTorch with CUDA support
+pip install torch torchvision --index-url https://download.pytorch.org/whl/cu124
+
+python -c "import torch; print(f'PyTorch {torch.__version__}, CUDA available: {torch.cuda.is_available()}')"
+
+# Install remaining deps
 pip install \
     fastapi==0.115.6 \
     "uvicorn[standard]==0.34.0" \
@@ -40,7 +51,7 @@ pip install \
     "huggingface-hub>=0.23.0" \
     numpy
 
-# Use onnxruntime-gpu instead of onnxruntime (for CUDA execution provider)
+# onnxruntime-gpu for CUDA face detection
 pip install "onnxruntime-gpu>=1.17.0"
 
 # ── 3. Download models (~11.5 GB for GPU mode) ──
@@ -48,7 +59,7 @@ echo ""
 echo "[3/4] Downloading models (SDXL + FaceID + CLIP + InsightFace)..."
 echo "       This will download ~11.5 GB on first run."
 cd "$REPO_DIR"
-python scripts/download_models.py --gpu
+.venv/bin/python scripts/download_models.py --gpu || server/.venv/bin/python scripts/download_models.py --gpu
 
 # ── 4. Install Node.js + frontend dependencies ──
 echo ""
@@ -72,7 +83,7 @@ echo ""
 echo "To start:  bash start.sh"
 echo "To stop:   bash stop.sh"
 echo ""
-echo "From your laptop, connect with:"
-echo "  ssh -i <key>.pem -L 5173:localhost:5173 -L 3001:localhost:3001 ubuntu@<ip>"
+echo "Connect from your laptop with:"
+echo "  .\scripts\connect.ps1 i-068e8e5b4c7fe01e9"
 echo "  Then open http://localhost:5173"
 echo ""
