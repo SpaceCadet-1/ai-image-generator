@@ -1,11 +1,11 @@
-"""FastAPI server — replaces Express server/index.js.
+"""FastAPI server for AI image generation.
 
-Same API contract:
+API:
   POST /api/generate  (multipart/form-data)
     - prompt: str (required)
     - referenceImage: file (optional)
     - faceStrength: float 0.0-1.0 (optional, default 0.6)
-  Returns: { "imageUrl": "data:image/png;base64,..." }
+  Returns: { "imageUrl": "/generated/abc123.jpg" }
 """
 
 # Use the OS certificate store (fixes corporate SSL inspection)
@@ -44,6 +44,8 @@ async def lifespan(app: FastAPI):
     """Load models on startup, clean up on shutdown."""
     print_config()
     UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
+    # Serve generated images as /generated/<filename>
+    app.mount("/generated", StaticFiles(directory=UPLOADS_DIR), name="generated")
     logger.info("Loading models (this may take a minute on first run)...")
     pipeline.load_models()
     logger.info("Server ready.")
@@ -99,15 +101,15 @@ async def generate_image(
             # Clamp face strength
             strength = max(0.0, min(1.0, faceStrength))
 
-            image_url = pipeline.generate_face_likeness(
+            filename = pipeline.generate_face_likeness(
                 prompt=prompt.strip(),
                 reference_image=ref_image,
                 face_strength=strength,
             )
         else:
-            image_url = pipeline.generate_text_to_image(prompt=prompt.strip())
+            filename = pipeline.generate_text_to_image(prompt=prompt.strip())
 
-        return {"imageUrl": image_url}
+        return {"imageUrl": f"/generated/{filename}"}
 
     except ValueError as e:
         logger.error(f"ValueError: {e}", exc_info=True)

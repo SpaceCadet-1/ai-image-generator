@@ -10,8 +10,6 @@ Two device targets:
   - CUDA (prod): SDXL, 1024x1024, float16
 """
 
-import io
-import base64
 import logging
 from pathlib import Path
 
@@ -199,12 +197,20 @@ def _set_clip_embeds(clip_hidden: torch.Tensor | None):
     proj_layer.shortcut = True  # FaceID Plus V2 uses shortcut connection
 
 
-def _image_to_base64_uri(image: Image.Image) -> str:
-    """Convert a PIL Image to a base64 data URI."""
-    buf = io.BytesIO()
-    image.save(buf, format="PNG")
-    b64 = base64.b64encode(buf.getvalue()).decode("utf-8")
-    return f"data:image/png;base64,{b64}"
+def _save_image(image: Image.Image) -> str:
+    """Save a PIL Image to the output directory and return its filename.
+
+    Uses JPEG for smaller file sizes (~200KB vs ~4MB PNG).
+    """
+    import uuid
+    from config import UPLOADS_DIR
+
+    UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
+    filename = f"{uuid.uuid4().hex}.jpg"
+    filepath = UPLOADS_DIR / filename
+    image.save(filepath, format="JPEG", quality=90)
+    logger.info(f"Saved image: {filepath} ({filepath.stat().st_size / 1024:.0f} KB)")
+    return filename
 
 
 def generate_text_to_image(
@@ -243,7 +249,7 @@ def generate_text_to_image(
     result = _pipe(**kwargs)
     image = result.images[0]
 
-    return _image_to_base64_uri(image)
+    return _save_image(image)
 
 
 def generate_face_likeness(
@@ -302,4 +308,4 @@ def generate_face_likeness(
     result = _pipe(**kwargs)
     image = result.images[0]
 
-    return _image_to_base64_uri(image)
+    return _save_image(image)
