@@ -2,7 +2,7 @@
 
 Usage:
     python scripts/download_models.py          # CPU mode (SD 1.5, ~4 GB)
-    python scripts/download_models.py --gpu     # GPU mode (adds SDXL, ~11.5 GB)
+    python scripts/download_models.py --gpu     # GPU mode (adds SDXL + InstantID, ~12 GB)
 """
 
 import argparse
@@ -24,7 +24,7 @@ def download_base_model(model_id: str, cache_dir: Path):
     """Download the Stable Diffusion base model."""
     from diffusers import StableDiffusionPipeline, StableDiffusionXLPipeline
 
-    print(f"\n[1/4] Downloading base model: {model_id}")
+    print(f"\n[1/3] Downloading base model: {model_id}")
     if "xl" in model_id.lower():
         StableDiffusionXLPipeline.from_pretrained(
             model_id,
@@ -40,33 +40,31 @@ def download_base_model(model_id: str, cache_dir: Path):
     print(f"  -> Saved to {cache_dir}")
 
 
-def download_face_adapter(repo: str, filenames: list[str], dest_dir: Path):
-    """Download IP-Adapter FaceID Plus V2 weights using snapshot_download."""
-    from huggingface_hub import snapshot_download
+def download_instantid_models(models_dir: Path, cache_dir: Path):
+    """Download InstantID ControlNet and IP-Adapter weights."""
+    from diffusers import ControlNetModel
+    from huggingface_hub import hf_hub_download
 
-    print(f"\n[2/4] Downloading IP-Adapter FaceID Plus V2 from {repo}")
-    for f in filenames:
-        print(f"  -> {f}")
+    print("\n[2/3] Downloading InstantID models from InstantX/InstantID")
 
-    dest_dir.mkdir(parents=True, exist_ok=True)
-    snapshot_download(
-        repo_id=repo,
-        allow_patterns=filenames,
-        local_dir=dest_dir / "ip-adapter-faceid",
-    )
-    print(f"  -> Saved to {dest_dir / 'ip-adapter-faceid'}")
-
-
-def download_clip_encoder(model_id: str, cache_dir: Path):
-    """Download CLIP ViT-H-14 image encoder."""
-    from transformers import CLIPVisionModelWithProjection
-
-    print(f"\n[3/4] Downloading CLIP image encoder: {model_id}")
-    CLIPVisionModelWithProjection.from_pretrained(
-        model_id,
+    # ControlNet (uses diffusers cache)
+    print("  -> Downloading ControlNet...")
+    ControlNetModel.from_pretrained(
+        "InstantX/InstantID",
+        subfolder="ControlNetModel",
         cache_dir=cache_dir,
     )
-    print(f"  -> Saved to {cache_dir}")
+
+    # IP-Adapter weights (local dir for direct file access)
+    dest_dir = models_dir / "instantid"
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    print("  -> Downloading IP-Adapter weights (ip-adapter.bin)...")
+    hf_hub_download(
+        repo_id="InstantX/InstantID",
+        filename="ip-adapter.bin",
+        local_dir=dest_dir,
+    )
+    print(f"  -> Saved to {dest_dir}")
 
 
 def download_insightface(model_dir: Path):
@@ -74,7 +72,7 @@ def download_insightface(model_dir: Path):
     from huggingface_hub import snapshot_download
     import zipfile
 
-    print(f"\n[4/4] Downloading InsightFace antelopev2")
+    print(f"\n[3/3] Downloading InsightFace antelopev2")
     model_dir.mkdir(parents=True, exist_ok=True)
 
     antelope_dir = model_dir / "models" / "antelopev2"
@@ -102,15 +100,13 @@ def download_insightface(model_dir: Path):
 
 def main():
     parser = argparse.ArgumentParser(description="Download models for AI Image Generator")
-    parser.add_argument("--gpu", action="store_true", help="Download SDXL models for GPU (adds ~7 GB)")
+    parser.add_argument("--gpu", action="store_true", help="Download SDXL + InstantID models for GPU (adds ~8 GB)")
     parser.add_argument("--cpu-only", action="store_true", help="Download only SD 1.5 models for CPU (~4 GB)")
     args = parser.parse_args()
 
     from config import (
         MODELS_DIR,
         LOCAL_MODEL_DIR,
-        FACE_ADAPTER_REPO,
-        CLIP_IMAGE_ENCODER_ID,
         INSIGHTFACE_MODEL_DIR,
     )
 
@@ -122,25 +118,16 @@ def main():
             "stable-diffusion-v1-5/stable-diffusion-v1-5",
             "stabilityai/stable-diffusion-xl-base-1.0",
         ]
-        face_files = [
-            "ip-adapter-faceid-plusv2_sd15.bin",
-            "ip-adapter-faceid-plusv2_sd15_lora.safetensors",
-            "ip-adapter-faceid-plusv2_sdxl.bin",
-            "ip-adapter-faceid-plusv2_sdxl_lora.safetensors",
-        ]
     else:
         base_models = ["stable-diffusion-v1-5/stable-diffusion-v1-5"]
-        face_files = [
-            "ip-adapter-faceid-plusv2_sd15.bin",
-            "ip-adapter-faceid-plusv2_sd15_lora.safetensors",
-        ]
 
     # Download all components
     for model_id in base_models:
         download_base_model(model_id, LOCAL_MODEL_DIR)
 
-    download_face_adapter(FACE_ADAPTER_REPO, face_files, MODELS_DIR)
-    download_clip_encoder(CLIP_IMAGE_ENCODER_ID, LOCAL_MODEL_DIR)
+    if args.gpu:
+        download_instantid_models(MODELS_DIR, LOCAL_MODEL_DIR)
+
     download_insightface(INSIGHTFACE_MODEL_DIR)
 
     print("\n--- Download complete ---")

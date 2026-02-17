@@ -4,7 +4,7 @@ API:
   POST /api/generate  (multipart/form-data)
     - prompt: str (required)
     - referenceImage: file (optional)
-    - faceStrength: float 0.0-1.0 (optional, default 0.6)
+    - faceStrength: float 0.0-1.0 (optional, default 0.8)
   Returns: { "imageUrl": "/generated/abc123.jpg" }
 """
 
@@ -16,7 +16,6 @@ except ImportError:
     pass
 
 import logging
-import shutil
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -44,8 +43,6 @@ async def lifespan(app: FastAPI):
     """Load models on startup, clean up on shutdown."""
     print_config()
     UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
-    # Serve generated images as /generated/<filename>
-    app.mount("/generated", StaticFiles(directory=UPLOADS_DIR), name="generated")
     logger.info("Loading models (this may take a minute on first run)...")
     pipeline.load_models()
     logger.info("Server ready.")
@@ -54,6 +51,10 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="AI Image Generator", lifespan=lifespan)
+
+# Serve generated images — must be mounted before the SPA catch-all
+UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
+app.mount("/generated", StaticFiles(directory=UPLOADS_DIR), name="generated")
 
 app.add_middleware(
     CORSMiddleware,
@@ -67,7 +68,7 @@ app.add_middleware(
 async def generate_image(
     prompt: str = Form(...),
     referenceImage: UploadFile | None = File(None),
-    faceStrength: float = Form(0.6),
+    faceStrength: float = Form(0.8),
 ):
     if not prompt or not prompt.strip():
         raise HTTPException(status_code=400, detail="Prompt is required")

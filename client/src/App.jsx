@@ -41,7 +41,7 @@ function App() {
   const [generatedPrompt, setGeneratedPrompt] = useState('');
   const [referenceImage, setReferenceImage] = useState(null);
   const [imagePreview, setImagePreview] = useState('');
-  const [faceStrength, setFaceStrength] = useState(0.6);
+  const [faceStrength, setFaceStrength] = useState(0.8);
   const fileInputRef = useRef(null);
 
   const handlePresetClick = (preset) => {
@@ -213,7 +213,7 @@ function App() {
           )}
           {referenceImage && (
             <>
-              <p className="model-note">Face-likeness mode (IP-Adapter FaceID)</p>
+              <p className="model-note">Face-likeness mode (InstantID)</p>
               <div className="face-strength-control">
                 <label>
                   Face Strength: {faceStrength.toFixed(1)}

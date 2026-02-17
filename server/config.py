@@ -32,17 +32,10 @@ else:
     NUM_INFERENCE_STEPS = 25
     DTYPE = torch.float32
 
-# IP-Adapter FaceID Plus V2 paths
-FACE_ADAPTER_REPO = "h94/IP-Adapter-FaceID"
-if USE_GPU:
-    FACE_ADAPTER_FILENAME = "ip-adapter-faceid-plusv2_sdxl.bin"
-    FACE_LORA_FILENAME = "ip-adapter-faceid-plusv2_sdxl_lora.safetensors"
-else:
-    FACE_ADAPTER_FILENAME = "ip-adapter-faceid-plusv2_sd15.bin"
-    FACE_LORA_FILENAME = "ip-adapter-faceid-plusv2_sd15_lora.safetensors"
-
-# CLIP image encoder for IP-Adapter
-CLIP_IMAGE_ENCODER_ID = "laion/CLIP-ViT-H-14-laion2B-s32B-b79K"
+# InstantID face-likeness (SDXL + GPU only)
+INSTANTID_REPO = "InstantX/InstantID"
+INSTANTID_CONTROLNET_SUBFOLDER = "ControlNetModel"
+INSTANTID_ADAPTER_FILENAME = "ip-adapter.bin"
 
 # InsightFace ONNX models for face detection/recognition
 INSIGHTFACE_MODEL_DIR = MODELS_DIR / "insightface"
@@ -66,5 +59,8 @@ def print_config():
     print(f"Image size:      {IMAGE_SIZE}x{IMAGE_SIZE}")
     print(f"Inference steps: {NUM_INFERENCE_STEPS}")
     print(f"Dtype:           {DTYPE}")
-    print(f"Face adapter:    {FACE_ADAPTER_FILENAME}")
+    if USE_GPU:
+        print(f"Face method:     InstantID ({INSTANTID_REPO})")
+    else:
+        print(f"Face method:     None (CPU mode)")
     print(f"Models dir:      {MODELS_DIR}")

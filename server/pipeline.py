@@ -2,17 +2,19 @@
 
 Two modes:
   - text-to-image: Standard Stable Diffusion generation from a text prompt.
-  - face-likeness: IP-Adapter FaceID Plus V2 — generates images preserving
-    a person's identity from a reference photo.
+  - face-likeness: InstantID — generates images preserving a person's identity
+    from a reference photo using ControlNet + IP-Adapter.
 
 Two device targets:
-  - CPU (dev): SD 1.5, 512x512, float32
-  - CUDA (prod): SDXL, 1024x1024, float16
+  - CPU (dev): SD 1.5, 512x512, float32 (text-only, no face support)
+  - CUDA (prod): SDXL + InstantID, 1024x1024, float16
 """
 
 import logging
+import math
 from pathlib import Path
 
+import cv2
 import numpy as np
 import torch
 from PIL import Image
@@ -24,10 +26,9 @@ from config import (
     BASE_MODEL_ID,
     IMAGE_SIZE,
     NUM_INFERENCE_STEPS,
-    FACE_ADAPTER_REPO,
-    FACE_ADAPTER_FILENAME,
-    FACE_LORA_FILENAME,
-    CLIP_IMAGE_ENCODER_ID,
+    INSTANTID_REPO,
+    INSTANTID_CONTROLNET_SUBFOLDER,
+    INSTANTID_ADAPTER_FILENAME,
     INSIGHTFACE_MODEL_DIR,
     LOCAL_MODEL_DIR,
     MODELS_DIR,
@@ -36,9 +37,52 @@ import face_analysis
 
 logger = logging.getLogger(__name__)
 
-# Module-level state — loaded once at startup
+# Module-level state
 _pipe = None
-_face_loaded = False
+
+
+def _draw_face_kps(image_size: tuple[int, int], kps: np.ndarray) -> Image.Image:
+    """Draw 5 face keypoints on a blank canvas for ControlNet conditioning.
+
+    Draws colored circles at each keypoint and lines connecting each to the nose.
+    This is the standard InstantID conditioning image format.
+
+    Args:
+        image_size: (width, height) of the output image.
+        kps: 5x2 array of keypoint coordinates (left eye, right eye, nose,
+             left mouth corner, right mouth corner).
+
+    Returns:
+        PIL Image with keypoints drawn on black background.
+    """
+    color_list = [(255, 0, 0), (0, 255, 0), (0, 0, 255), (255, 255, 0), (255, 0, 255)]
+    limb_seq = [[0, 2], [1, 2], [3, 2], [4, 2]]  # Connect each point to nose
+    stickwidth = 4
+
+    w, h = image_size
+    out_img = np.zeros([h, w, 3], dtype=np.uint8)
+    kps = np.array(kps)
+
+    # Draw limbs (connections to nose)
+    for limb in limb_seq:
+        color = color_list[limb[0]]
+        x = kps[limb][:, 0]
+        y = kps[limb][:, 1]
+        length = ((x[0] - x[1]) ** 2 + (y[0] - y[1]) ** 2) ** 0.5
+        angle = math.degrees(math.atan2(y[0] - y[1], x[0] - x[1]))
+        polygon = cv2.ellipse2Poly(
+            (int(np.mean(x)), int(np.mean(y))),
+            (int(length / 2), stickwidth),
+            int(angle), 0, 360, 1,
+        )
+        out_img = cv2.fillConvexPoly(out_img, polygon, color)
+
+    # Draw keypoint circles
+    for idx, kp in enumerate(kps):
+        color = color_list[idx]
+        out_img = cv2.circle(out_img, (int(kp[0]), int(kp[1])), 10, color, -1)
+
+    return Image.fromarray(out_img)
 
 
 def _load_base_pipeline():
@@ -46,14 +90,54 @@ def _load_base_pipeline():
     global _pipe
 
     if USE_GPU:
-        from diffusers import StableDiffusionXLPipeline
+        from diffusers import ControlNetModel
+        from pipeline_stable_diffusion_xl_instantid import StableDiffusionXLInstantIDPipeline
 
-        logger.info("Loading SDXL pipeline on CUDA...")
-        _pipe = StableDiffusionXLPipeline.from_pretrained(
+        logger.info("Loading InstantID ControlNet...")
+        controlnet = ControlNetModel.from_pretrained(
+            INSTANTID_REPO,
+            subfolder=INSTANTID_CONTROLNET_SUBFOLDER,
+            torch_dtype=DTYPE,
+            cache_dir=LOCAL_MODEL_DIR,
+        )
+
+        logger.info("Loading SDXL + InstantID pipeline on CUDA...")
+        _pipe = StableDiffusionXLInstantIDPipeline.from_pretrained(
             BASE_MODEL_ID,
+            controlnet=controlnet,
             torch_dtype=DTYPE,
             cache_dir=LOCAL_MODEL_DIR,
         ).to(DEVICE)
+
+        # Load InstantID IP-Adapter weights
+        adapter_path = MODELS_DIR / "instantid" / INSTANTID_ADAPTER_FILENAME
+        if not adapter_path.exists():
+            logger.info("Downloading InstantID IP-Adapter weights...")
+            from huggingface_hub import hf_hub_download
+
+            adapter_path.parent.mkdir(parents=True, exist_ok=True)
+            hf_hub_download(
+                repo_id=INSTANTID_REPO,
+                filename=INSTANTID_ADAPTER_FILENAME,
+                local_dir=adapter_path.parent,
+            )
+
+        logger.info("Loading InstantID IP-Adapter weights...")
+        _pipe.load_ip_adapter_instantid(str(adapter_path))
+
+        # Verify IP-Adapter loaded correctly
+        ip_count = sum(1 for p in _pipe.unet.attn_processors.values()
+                       if type(p).__name__.startswith("IPAttn"))
+        has_proj = hasattr(_pipe, "image_proj_model")
+        proj_params = sum(p.numel() for p in _pipe.image_proj_model.parameters()) if has_proj else 0
+        logger.info(f"IP-Adapter verification: {ip_count} IP processors, "
+                     f"image_proj_model={'yes' if has_proj else 'MISSING'} ({proj_params:,} params)")
+
+        # Load face detection/recognition ONNX models
+        providers = ["CUDAExecutionProvider", "CPUExecutionProvider"]
+        logger.info("Loading face detection/recognition ONNX models...")
+        face_analysis.load(str(INSIGHTFACE_MODEL_DIR), providers)
+        logger.info("Face models loaded.")
     else:
         from diffusers import StableDiffusionPipeline
 
@@ -64,144 +148,17 @@ def _load_base_pipeline():
             cache_dir=LOCAL_MODEL_DIR,
         ).to(DEVICE)
 
-    # GPU memory optimization
-    if USE_GPU:
-        _pipe.enable_model_cpu_offload()
-
-    logger.info("Base pipeline loaded.")
-
-
-def _load_face_detection():
-    """Load ONNX face detection and recognition models."""
-    providers = (
-        ["CUDAExecutionProvider", "CPUExecutionProvider"]
-        if USE_GPU
-        else ["CPUExecutionProvider"]
-    )
-    logger.info("Loading face detection/recognition ONNX models...")
-    face_analysis.load(str(INSIGHTFACE_MODEL_DIR), providers)
-    logger.info("Face models loaded.")
-
-
-def _load_face_adapter():
-    """Load IP-Adapter FaceID Plus V2 onto the pipeline."""
-    global _pipe, _face_loaded
-
-    from huggingface_hub import hf_hub_download
-    from transformers import CLIPVisionModelWithProjection
-
-    logger.info("Loading CLIP image encoder...")
-    image_encoder = CLIPVisionModelWithProjection.from_pretrained(
-        CLIP_IMAGE_ENCODER_ID,
-        torch_dtype=DTYPE,
-        cache_dir=LOCAL_MODEL_DIR,
-    ).to(DEVICE)
-
-    # Set image encoder on pipeline before loading IP-Adapter
-    _pipe.image_encoder = image_encoder
-
-    # Download adapter weights if not already local
-    adapter_path = MODELS_DIR / "ip-adapter-faceid" / FACE_ADAPTER_FILENAME
-    lora_path = MODELS_DIR / "ip-adapter-faceid" / FACE_LORA_FILENAME
-
-    if not adapter_path.exists():
-        logger.info(f"Downloading {FACE_ADAPTER_FILENAME}...")
-        hf_hub_download(
-            repo_id=FACE_ADAPTER_REPO,
-            filename=FACE_ADAPTER_FILENAME,
-            local_dir=MODELS_DIR / "ip-adapter-faceid",
-        )
-    if not lora_path.exists():
-        logger.info(f"Downloading {FACE_LORA_FILENAME}...")
-        hf_hub_download(
-            repo_id=FACE_ADAPTER_REPO,
-            filename=FACE_LORA_FILENAME,
-            local_dir=MODELS_DIR / "ip-adapter-faceid",
-        )
-
-    logger.info("Loading IP-Adapter FaceID Plus V2...")
-
-    # Load LoRA weights
-    _pipe.load_lora_weights(
-        str(lora_path.parent),
-        weight_name=FACE_LORA_FILENAME,
-    )
-    _pipe.fuse_lora(lora_scale=0.5)
-
-    # Load IP-Adapter (image_encoder_folder=None since we set it above)
-    _pipe.load_ip_adapter(
-        str(adapter_path.parent),
-        subfolder="",
-        weight_name=FACE_ADAPTER_FILENAME,
-        image_encoder_folder=None,
-    )
-
-    _face_loaded = True
-    logger.info("Face adapter loaded.")
+    logger.info("Pipeline loaded.")
 
 
 def load_models():
-    """Load all models at startup. Call once from main.py lifespan."""
+    """Load pipeline at startup."""
     _load_base_pipeline()
-    _load_face_detection()
-    _load_face_adapter()
-    logger.info(f"All models loaded on {DEVICE}.")
-
-
-def _extract_face_embedding(image: Image.Image) -> np.ndarray:
-    """Extract face embedding from a PIL image."""
-    img_array = np.array(image)
-    # face_analysis expects BGR
-    if img_array.ndim == 3 and img_array.shape[2] == 3:
-        img_bgr = img_array[:, :, ::-1]
-    else:
-        img_bgr = img_array
-
-    return face_analysis.get_face_embedding(img_bgr)
-
-
-def _encode_clip_features(image: Image.Image) -> torch.Tensor:
-    """Encode a PIL image through CLIP to get hidden states for FaceID Plus.
-
-    Returns tensor of shape (1, 257, 1280) — CLIP ViT-H-14 hidden states.
-    """
-    pixel_values = _pipe.feature_extractor(images=image, return_tensors="pt").pixel_values
-    pixel_values = pixel_values.to(device=DEVICE, dtype=DTYPE)
-    clip_output = _pipe.image_encoder(pixel_values, output_hidden_states=True)
-    return clip_output.hidden_states[-2]
-
-
-def _set_clip_embeds(clip_hidden: torch.Tensor | None):
-    """Set CLIP embeddings on the FaceID Plus projection layer.
-
-    The IPAdapterFaceIDPlusImageProjection layer reads self.clip_embeds
-    during its forward pass. This must be set before each pipeline call.
-
-    Args:
-        clip_hidden: CLIP hidden states (1, 257, 1280) or None for zeros.
-    """
-    proj_layer = _pipe.unet.encoder_hid_proj.image_projection_layers[0]
-
-    if clip_hidden is None:
-        # For text-only: zeros. Shape must be (batch, 1, 257, 1280) where
-        # batch=2 for CFG (negative + positive).
-        proj_layer.clip_embeds = torch.zeros(
-            2, 1, 257, 1280, dtype=DTYPE, device=DEVICE
-        )
-    else:
-        # For face mode: negative (zeros) + positive (actual CLIP features)
-        clip_hidden = clip_hidden.unsqueeze(0)  # (1, 1, 257, 1280)
-        neg_clip = torch.zeros_like(clip_hidden)
-        proj_layer.clip_embeds = torch.cat([neg_clip, clip_hidden], dim=0)  # (2, 1, 257, 1280)
-
-    proj_layer.shortcut = True  # FaceID Plus V2 uses shortcut connection
+    logger.info(f"Models loaded on {DEVICE}.")
 
 
 def _save_image(image: Image.Image) -> str:
-    """Save a PIL Image to the output directory and return its filename.
-
-    Uses JPEG for smaller file sizes (~200KB vs ~4MB PNG).
-    """
+    """Save a PIL Image to the output directory and return its filename."""
     import uuid
     from config import UPLOADS_DIR
 
@@ -218,17 +175,12 @@ def generate_text_to_image(
     negative_prompt: str = "",
     seed: int | None = None,
 ) -> str:
-    """Generate an image from a text prompt. Returns a base64 data URI."""
+    """Generate an image from a text prompt. Returns the saved filename."""
     generator = torch.Generator(device=DEVICE)
     if seed is not None:
         generator.manual_seed(seed)
     else:
         generator.seed()
-
-    # Disable face adapter influence for text-only generation
-    if _face_loaded:
-        _pipe.set_ip_adapter_scale(0.0)
-        _set_clip_embeds(None)
 
     kwargs = {
         "prompt": prompt,
@@ -240,10 +192,12 @@ def generate_text_to_image(
     if negative_prompt:
         kwargs["negative_prompt"] = negative_prompt
 
-    # Pass zero face ID embeddings (required even when scale is 0)
-    if _face_loaded:
-        zero_embed = torch.zeros(2, 1, 512, dtype=DTYPE, device=DEVICE)
-        kwargs["ip_adapter_image_embeds"] = [zero_embed]
+    if USE_GPU:
+        # InstantID pipeline requires face inputs — pass zeros with scales=0
+        kwargs["image_embeds"] = torch.zeros(1, 512, dtype=DTYPE, device=DEVICE)
+        kwargs["image"] = Image.new("RGB", (IMAGE_SIZE, IMAGE_SIZE), "black")
+        kwargs["controlnet_conditioning_scale"] = 0.0
+        kwargs["ip_adapter_scale"] = 0.0
 
     logger.info(f"Generating text-to-image ({IMAGE_SIZE}x{IMAGE_SIZE}, {NUM_INFERENCE_STEPS} steps)...")
     result = _pipe(**kwargs)
@@ -255,7 +209,7 @@ def generate_text_to_image(
 def generate_face_likeness(
     prompt: str,
     reference_image: Image.Image,
-    face_strength: float = 0.6,
+    face_strength: float = 0.8,
     negative_prompt: str = "",
     seed: int | None = None,
 ) -> str:
@@ -269,17 +223,33 @@ def generate_face_likeness(
         seed: Optional random seed for reproducibility.
 
     Returns:
-        Base64 data URI of the generated image.
+        Filename of the generated image.
     """
-    # Extract face ID embedding (512-dim from InsightFace)
-    face_embed = _extract_face_embedding(reference_image)
-    face_embed_single = torch.from_numpy(face_embed).unsqueeze(0).unsqueeze(0).to(DEVICE, dtype=DTYPE)
-    neg_embed = torch.zeros_like(face_embed_single)
-    face_embed_tensor = torch.cat([neg_embed, face_embed_single], dim=0)  # (2, 1, 512)
+    if not USE_GPU:
+        raise ValueError(
+            "Face likeness requires GPU mode (SDXL + InstantID). "
+            "This feature is not available on CPU."
+        )
 
-    # Encode reference image through CLIP for the Plus V2 projection layer
-    clip_hidden = _encode_clip_features(reference_image)
-    _set_clip_embeds(clip_hidden)
+    # Extract face embedding and landmarks from reference image
+    img_array = np.array(reference_image)
+    if img_array.ndim == 3 and img_array.shape[2] == 3:
+        img_bgr = img_array[:, :, ::-1]
+    else:
+        img_bgr = img_array
+
+    face_embed, landmarks = face_analysis.get_face_info(img_bgr)
+    logger.info(f"Face embedding: norm={np.linalg.norm(face_embed):.1f}")
+
+    # Prepare face embedding tensor — shape (1, 512)
+    face_embed_tensor = torch.from_numpy(face_embed).unsqueeze(0).to(DEVICE, dtype=DTYPE)
+
+    # Scale landmarks from reference image coords to output image size
+    h, w = img_bgr.shape[:2]
+    scaled_kps = landmarks.copy()
+    scaled_kps[:, 0] = scaled_kps[:, 0] * IMAGE_SIZE / w
+    scaled_kps[:, 1] = scaled_kps[:, 1] * IMAGE_SIZE / h
+    face_kps_image = _draw_face_kps((IMAGE_SIZE, IMAGE_SIZE), scaled_kps)
 
     generator = torch.Generator(device=DEVICE)
     if seed is not None:
@@ -287,12 +257,17 @@ def generate_face_likeness(
     else:
         generator.seed()
 
-    # Set IP-Adapter influence strength
-    _pipe.set_ip_adapter_scale(face_strength)
+    # Scale balance: ip_adapter_scale drives identity preservation,
+    # controlnet_conditioning_scale drives spatial/pose guidance.
+    ip_scale = face_strength
+    cn_scale = face_strength
 
     kwargs = {
         "prompt": prompt,
-        "ip_adapter_image_embeds": [face_embed_tensor],
+        "image_embeds": face_embed_tensor,
+        "image": face_kps_image,
+        "controlnet_conditioning_scale": cn_scale,
+        "ip_adapter_scale": ip_scale,
         "num_inference_steps": NUM_INFERENCE_STEPS,
         "generator": generator,
         "height": IMAGE_SIZE,
@@ -303,7 +278,7 @@ def generate_face_likeness(
 
     logger.info(
         f"Generating face-likeness ({IMAGE_SIZE}x{IMAGE_SIZE}, "
-        f"{NUM_INFERENCE_STEPS} steps, strength={face_strength})..."
+        f"{NUM_INFERENCE_STEPS} steps, ip_scale={ip_scale:.2f}, cn_scale={cn_scale:.2f})..."
     )
     result = _pipe(**kwargs)
     image = result.images[0]

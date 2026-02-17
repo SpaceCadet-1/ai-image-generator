@@ -7,7 +7,7 @@ with direct ONNX model inference. Uses the same antelopev2 models:
 
 Only two public functions:
   - load(model_dir, providers) → initializes the ONNX sessions
-  - get_face_embedding(image) → returns the 512-dim normed embedding
+  - get_face_embedding(image) → returns the 512-dim face embedding
 """
 
 import cv2
@@ -222,7 +222,11 @@ def _align_face(img_bgr, landmarks):
 
 
 def _get_embedding(aligned_face_bgr):
-    """Extract 512-dim face embedding from aligned 112x112 face."""
+    """Extract 512-dim face embedding from aligned 112x112 face.
+
+    Returns the raw (unnormalized) embedding from the ArcFace model.
+    InstantID's Resampler expects unnormalized embeddings (norm ~20-25).
+    """
     # Normalize to [-1, 1] and convert to NCHW float32
     img = aligned_face_bgr.astype(np.float32)
     img = (img / 127.5) - 1.0
@@ -232,12 +236,22 @@ def _get_embedding(aligned_face_bgr):
     embedding = _rec_session.run(None, {_rec_session.get_inputs()[0].name: img})[0]
     embedding = embedding.flatten()
 
-    # L2 normalize
-    norm = np.linalg.norm(embedding)
-    if norm > 0:
-        embedding = embedding / norm
-
     return embedding
+
+
+def _get_largest_face(img_bgr: np.ndarray):
+    """Detect faces and return the largest (bbox, score, landmarks)."""
+    if _det_session is None or _rec_session is None:
+        raise RuntimeError("Face models not loaded. Call face_analysis.load() first.")
+
+    faces = _detect_faces(img_bgr)
+    if not faces:
+        raise ValueError(
+            "No face detected in the reference image. "
+            "Please upload a clear photo with a visible face."
+        )
+
+    return max(faces, key=lambda f: (f[0][2] - f[0][0]) * (f[0][3] - f[0][1]))
 
 
 def get_face_embedding(img_bgr: np.ndarray) -> np.ndarray:
@@ -252,21 +266,24 @@ def get_face_embedding(img_bgr: np.ndarray) -> np.ndarray:
     Raises:
         ValueError: If no face is detected.
     """
-    if _det_session is None or _rec_session is None:
-        raise RuntimeError("Face models not loaded. Call face_analysis.load() first.")
+    _, _, landmarks = _get_largest_face(img_bgr)
+    aligned = _align_face(img_bgr, landmarks)
+    return _get_embedding(aligned)
 
-    faces = _detect_faces(img_bgr)
-    if not faces:
-        raise ValueError(
-            "No face detected in the reference image. "
-            "Please upload a clear photo with a visible face."
-        )
 
-    # Pick the largest face (most prominent)
-    largest = max(faces, key=lambda f: (f[0][2] - f[0][0]) * (f[0][3] - f[0][1]))
-    _, _, landmarks = largest
+def get_face_info(img_bgr: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """Detect the most prominent face and return embedding + 5 keypoints.
 
+    Args:
+        img_bgr: Input image in BGR format (numpy array).
+
+    Returns:
+        Tuple of (512-dim normalized embedding, 5x2 keypoints array).
+
+    Raises:
+        ValueError: If no face is detected.
+    """
+    _, _, landmarks = _get_largest_face(img_bgr)
     aligned = _align_face(img_bgr, landmarks)
     embedding = _get_embedding(aligned)
-
-    return embedding
+    return embedding, landmarks
