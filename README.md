@@ -5,7 +5,7 @@ A fully offline web application that generates images from text descriptions usi
 ## Features
 
 - Text-to-image generation with style presets and mood controls
-- Face-likeness mode using IP-Adapter FaceID Plus V2
+- Face-likeness mode using InstantID (GPU only) — preserves identity from a reference photo
 - Adjustable face strength slider (0.0-1.0)
 - Runs entirely offline — no API keys needed
 - Dual-device support: CPU (dev) and GPU (prod)
@@ -69,7 +69,7 @@ npm run dev
 
 ### 5. Use the application
 
-1. Open http://localhost:3000 in your browser
+1. Open http://localhost:5173 in your browser (or http://localhost:3001 for production build)
 2. Enter an image description
 3. Optionally upload a reference face photo
 4. Click "Generate Image"
@@ -94,12 +94,18 @@ ai-image-generator/
 ├── server/                  # Python FastAPI backend
 │   ├── main.py              # FastAPI server
 │   ├── pipeline.py          # Model loading & inference
+│   ├── face_analysis.py     # ONNX face detection/recognition
 │   ├── config.py            # Device-aware configuration
+│   ├── pipeline_stable_diffusion_xl_instantid.py  # InstantID community pipeline
+│   ├── ip_adapter/          # IP-Adapter module (resampler, attention)
 │   ├── requirements.txt     # Python dependencies
 │   ├── models/              # Downloaded model weights (gitignored)
-│   └── uploads/             # Temp upload directory (gitignored)
+│   └── uploads/             # Generated images (gitignored)
 ├── scripts/
-│   └── download_models.py   # Model download script
+│   ├── download_models.py   # Model download script
+│   ├── setup-aws.sh         # One-time AWS instance setup
+│   ├── install-service.sh   # Install as systemd service on AWS
+│   └── connect.ps1          # SSM tunnel from Windows laptop
 └── server_legacy/           # Archived Express/OpenAI server
     ├── index.js
     └── package.json
@@ -110,6 +116,7 @@ ai-image-generator/
 | Environment | Mode | Resolution | Time per Image |
 |-------------|------|-----------|----------------|
 | CPU (dev) | SD 1.5 text-only | 512x512 | 30-60 sec |
-| CPU (dev) | SD 1.5 + FaceID | 512x512 | 45-90 sec |
-| A10G GPU (prod) | SDXL text-only | 1024x1024 | 5-10 sec |
-| A10G GPU (prod) | SDXL + FaceID | 1024x1024 | 8-15 sec |
+| A10G GPU (prod) | SDXL text-only | 1024x1024 | ~21 sec |
+| A10G GPU (prod) | SDXL + InstantID face | 1024x1024 | ~21 sec |
+
+> Face-likeness mode requires GPU (SDXL + InstantID). Not available on CPU.
